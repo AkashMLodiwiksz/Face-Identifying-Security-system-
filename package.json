@@ -1,0 +1,25 @@
+{
+  "name": "face-recognition-security-system",
+  "version": "1.0.0",
+  "description": "Face Recognition Security System with React Frontend and Flask Backend",
+  "scripts": {
+    "dev": "concurrently \"npm run frontend\" \"npm run backend\"",
+    "frontend": "cd frontend-react && npm run dev",
+    "backend": "cd backend && py app.py",
+    "install-all": "cd frontend-react && npm install && cd ../backend && py -m pip install -r requirements.txt",
+    "build": "cd frontend-react && npm run build"
+  },
+  "keywords": [
+    "face-recognition",
+    "security",
+    "ai",
+    "react",
+    "flask",
+    "computer-vision"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
