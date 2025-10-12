@@ -34,12 +34,19 @@ const Layout = ({ children }) => {
   ];
 
   const handleLogout = () => {
+    // Clear both localStorage and sessionStorage
     localStorage.removeItem('authToken');
-    localStorage.removeItem('user');
+    localStorage.removeItem('username');
+    localStorage.removeItem('userRole');
+    localStorage.removeItem('rememberMe');
+    sessionStorage.removeItem('authToken');
+    sessionStorage.removeItem('username');
+    sessionStorage.removeItem('userRole');
     navigate('/login');
   };
 
-  const user = JSON.parse(localStorage.getItem('user') || '{"name":"User","role":"Admin"}');
+  const username = localStorage.getItem('username') || sessionStorage.getItem('username') || 'User';
+  const userRole = localStorage.getItem('userRole') || sessionStorage.getItem('userRole') || 'User';
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-dark">
@@ -96,8 +103,8 @@ const Layout = ({ children }) => {
                 <User className="w-5 h-5" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium truncate">{user.name}</p>
-                <p className="text-xs text-gray-400 truncate">{user.role}</p>
+                <p className="text-sm font-medium truncate">{username}</p>
+                <p className="text-xs text-gray-400 truncate capitalize">{userRole}</p>
               </div>
             </div>
             <button
@@ -136,7 +143,7 @@ const Layout = ({ children }) => {
                   <User className="w-4 h-4 text-white" />
                 </div>
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {user.name}
+                  {username}
                 </span>
                 <ChevronDown className="w-4 h-4 text-gray-500" />
               </button>

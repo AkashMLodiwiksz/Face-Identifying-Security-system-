@@ -87,26 +87,71 @@ def health():
 # Authentication endpoints
 @app.route('/api/auth/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    
-    # TODO: Implement real authentication
-    if username and password:
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({
+                "success": False,
+                "message": "Username and password are required"
+            }), 400
+        
+        # Find user in database
+        user = User.query.filter_by(username=username).first()
+        
+        if not user:
+            return jsonify({
+                "success": False,
+                "message": "Invalid username or password"
+            }), 401
+        
+        # Check if user is active
+        if not user.is_active:
+            return jsonify({
+                "success": False,
+                "message": "Account is disabled"
+            }), 401
+        
+        # Verify password
+        if not user.check_password(password):
+            return jsonify({
+                "success": False,
+                "message": "Invalid username or password"
+            }), 401
+        
+        # Update last login
+        user.last_login = datetime.utcnow()
+        db.session.commit()
+        
+        # Generate token (in production, use JWT)
+        token = f"token-{user.id}-{datetime.utcnow().timestamp()}"
+        
         return jsonify({
             "success": True,
-            "token": "dummy-token-123",
+            "message": "Login successful",
+            "token": token,
             "user": {
-                "username": username,
-                "name": "John Doe",
-                "role": "Administrator"
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role
             }
-        })
-    return jsonify({"success": False, "message": "Invalid credentials"}), 401
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": "An error occurred during login"
+        }), 500
 
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
-    return jsonify({"success": True, "message": "Logged out successfully"})
+    return jsonify({
+        "success": True,
+        "message": "Logout successful"
+    }), 200
 
 # Dashboard statistics
 @app.route('/api/dashboard/stats')

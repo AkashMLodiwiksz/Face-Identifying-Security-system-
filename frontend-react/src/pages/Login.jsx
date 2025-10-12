@@ -1,38 +1,54 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Eye, Camera, Bell, Lock, User } from 'lucide-react';
+import { LogIn, Shield, Camera, Users, Bell } from 'lucide-react';
+import api from '../services/api';
 
-const Login = () => {
+export default function Login() {
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({
-    username: '',
-    password: '',
-    rememberMe: false
-  });
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
-  };
-
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    // Test credentials: username = 1, password = 1
-    if (username === '1' && password === '1') {
-      // Store auth token
-      localStorage.setItem('authToken', 'dummy-token');
-      localStorage.setItem('username', username);
-      
-      // Redirect to dashboard
-      navigate('/dashboard');
-    } else {
-      alert('Invalid credentials! Use username: 1 and password: 1');
+    setError('');
+    setLoading(true);
+
+    try {
+      // Call backend API for authentication
+      const response = await api.post('/auth/login', {
+        username,
+        password
+      });
+
+      if (response.data.success) {
+        // Store auth token and user info
+        if (rememberMe) {
+          // Store in localStorage for persistent login
+          localStorage.setItem('authToken', response.data.token);
+          localStorage.setItem('username', response.data.user.username);
+          localStorage.setItem('userRole', response.data.user.role);
+          localStorage.setItem('rememberMe', 'true');
+        } else {
+          // Store in sessionStorage for session-only login
+          sessionStorage.setItem('authToken', response.data.token);
+          sessionStorage.setItem('username', response.data.user.username);
+          sessionStorage.setItem('userRole', response.data.user.role);
+          // Also set a minimal flag in localStorage
+          localStorage.setItem('authToken', response.data.token);
+          localStorage.setItem('username', response.data.user.username);
+          localStorage.setItem('userRole', response.data.user.role);
+        }
+        
+        // Redirect to dashboard
+        navigate('/dashboard');
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Invalid username or password');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -55,19 +71,19 @@ const Login = () => {
             <div className="flex items-start">
               <Camera className="w-6 h-6 mr-3 mt-1 flex-shrink-0" />
               <div>
-                <h3 className="font-semibold text-lg mb-1">Real-time Monitoring</h3>
-                <p className="text-blue-100">
-                  Monitor multiple cameras simultaneously with AI-powered detection
+                <h3 className="font-semibold mb-1">Real-time Monitoring</h3>
+                <p className="text-blue-100 text-sm">
+                  24/7 surveillance with instant face detection and recognition
                 </p>
               </div>
             </div>
 
             <div className="flex items-start">
-              <Eye className="w-6 h-6 mr-3 mt-1 flex-shrink-0" />
+              <Users className="w-6 h-6 mr-3 mt-1 flex-shrink-0" />
               <div>
-                <h3 className="font-semibold text-lg mb-1">Intelligent Recognition</h3>
-                <p className="text-blue-100">
-                  Identify faces, objects, and animals with high accuracy
+                <h3 className="font-semibold mb-1">Intruder Detection</h3>
+                <p className="text-blue-100 text-sm">
+                  Automatic identification of unauthorized personnel
                 </p>
               </div>
             </div>
@@ -75,104 +91,97 @@ const Login = () => {
             <div className="flex items-start">
               <Bell className="w-6 h-6 mr-3 mt-1 flex-shrink-0" />
               <div>
-                <h3 className="font-semibold text-lg mb-1">Instant Alerts</h3>
-                <p className="text-blue-100">
-                  Get notified immediately when unknown persons are detected
+                <h3 className="font-semibold mb-1">Instant Alerts</h3>
+                <p className="text-blue-100 text-sm">
+                  Real-time notifications for security events
                 </p>
               </div>
             </div>
           </div>
-
-          <div className="mt-12 pt-8 border-t border-blue-300 border-opacity-30">
-            <p className="text-sm text-blue-100">
-              Powered by advanced AI including YOLO, FaceNet, and DeepSORT
-            </p>
-          </div>
         </div>
 
         {/* Right Side - Login Form */}
-        <div className="md:w-1/2 p-12 flex flex-col justify-center bg-gray-50">
-          <div className="max-w-md mx-auto w-full">
+        <div className="md:w-1/2 p-12 flex flex-col justify-center">
+          <div className="max-w-md w-full mx-auto">
             <h2 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back</h2>
-            <p className="text-gray-600 mb-8">Please sign in to continue</p>
-
-            {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6 animate-fade-in">
-                <p className="text-sm">{error}</p>
-              </div>
-            )}
+            <p className="text-gray-600 mb-8">Sign in to access your security dashboard</p>
 
             <form onSubmit={handleSubmit} className="space-y-6">
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                  {error}
+                </div>
+              )}
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
                   Username
                 </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    name="username"
-                    value={formData.username}
-                    onChange={handleChange}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-gray-900 placeholder:text-gray-400"
-                    placeholder="Enter your username"
-                  />
-                </div>
+                <input
+                  type="text"
+                  id="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 placeholder-gray-400"
+                  placeholder="Enter your username"
+                  required
+                  disabled={loading}
+                />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
                   Password
                 </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="password"
-                    name="password"
-                    value={formData.password}
-                    onChange={handleChange}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-gray-900 placeholder:text-gray-400"
-                    placeholder="Enter your password"
-                  />
-                </div>
+                <input
+                  type="password"
+                  id="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 placeholder-gray-400"
+                  placeholder="Enter your password"
+                  required
+                  disabled={loading}
+                />
               </div>
 
               <div className="flex items-center">
-                <label className="flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    name="rememberMe"
-                    checked={formData.rememberMe}
-                    onChange={handleChange}
-                    className="w-4 h-4 text-primary border-gray-300 rounded focus:ring-primary"
-                  />
-                  <span className="ml-2 text-sm text-gray-600">Remember me</span>
+                <input
+                  type="checkbox"
+                  id="rememberMe"
+                  checked={rememberMe}
+                  onChange={(e) => setRememberMe(e.target.checked)}
+                  className="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded cursor-pointer"
+                  disabled={loading}
+                />
+                <label htmlFor="rememberMe" className="ml-2 block text-sm text-gray-700 cursor-pointer">
+                  Remember me for 30 days
                 </label>
               </div>
 
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-gradient-primary text-white py-3 rounded-lg font-semibold hover:shadow-lg transform hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-gradient-primary text-white py-3 px-6 rounded-lg font-semibold hover:opacity-90 transition-all duration-200 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? (
-                  <span className="flex items-center justify-center">
-                    <svg className="animate-spin h-5 w-5 mr-2" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
                     Signing in...
-                  </span>
+                  </>
                 ) : (
-                  'Sign In'
+                  <>
+                    <LogIn className="w-5 h-5 mr-2" />
+                    Sign In
+                  </>
                 )}
               </button>
             </form>
 
-            <div className="mt-8 text-center">
+            <div className="mt-6 text-center">
               <p className="text-sm text-gray-600">
-                Don't have an account?{' '}
-                <a href="#" className="text-primary hover:text-primary-dark font-medium transition-colors">
+                Need access?{' '}
+                <a href="#" className="text-primary font-semibold hover:underline">
                   Create Account
                 </a>
               </p>
@@ -182,6 +191,4 @@ const Login = () => {
       </div>
     </div>
   );
-};
-
-export default Login;
+}
