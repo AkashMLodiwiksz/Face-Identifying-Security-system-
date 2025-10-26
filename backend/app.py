@@ -1,9 +1,11 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from datetime import datetime
-from models import db, User
+from models import db, User, Camera, DetectionEvent, SystemLog
 from dotenv import load_dotenv
 import os
+import base64
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
@@ -38,6 +40,18 @@ with app.app_context():
         db.session.add(admin)
         db.session.commit()
         print("[SUCCESS] Default admin user created (username: 1, password: 1)")
+    
+    # Create captures directory if it doesn't exist
+    captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
+    if not os.path.exists(captures_dir):
+        os.makedirs(captures_dir)
+        print("[SUCCESS] Captures directory created")
+    
+    # Create recordings directory if it doesn't exist
+    recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+    if not os.path.exists(recordings_dir):
+        os.makedirs(recordings_dir)
+        print("[SUCCESS] Recordings directory created")
 
 # Sample data (will be replaced with database)
 cameras_data = [
@@ -163,11 +177,7 @@ def dashboard_stats():
         "detectionsToday": 156
     })
 
-# Camera endpoints
-@app.route('/api/cameras')
-def get_cameras():
-    return jsonify(cameras_data)
-
+# Camera endpoints (legacy - keeping for backward compatibility)
 @app.route('/api/cameras/<int:camera_id>')
 def get_camera(camera_id):
     camera = next((c for c in cameras_data if c['id'] == camera_id), None)
@@ -220,18 +230,462 @@ def get_alerts():
         }
     ])
 
-# Detection events
 @app.route('/api/detections')
 def get_detections():
-    return jsonify([
-        {
-            "id": 1,
-            "cameraId": 1,
-            "type": "person",
-            "confidence": 0.98,
-            "timestamp": "2025-10-05 18:45:12"
-        }
-    ])
+    try:
+        # Get detections from database
+        detections = DetectionEvent.query.order_by(DetectionEvent.timestamp.desc()).limit(100).all()
+        
+        detection_list = []
+        for detection in detections:
+            detection_list.append({
+                "id": detection.id,
+                "cameraId": detection.camera_id,
+                "personId": detection.person_id if detection.person_id else None,
+                "confidence": float(detection.confidence) if detection.confidence else 0.0,
+                "timestamp": detection.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                "isAuthorized": detection.person_id is not None
+            })
+        
+        return jsonify(detection_list)
+    except Exception as e:
+        print(f"Error fetching detections: {e}")
+        return jsonify([])
+
+# Process captured frame for face detection
+@app.route('/api/detection/process-frame', methods=['POST'])
+def process_frame():
+    try:
+        data = request.get_json()
+        
+        if not data or 'image' not in data:
+            return jsonify({"error": "No image data provided"}), 400
+        
+        # Get the base64 image data
+        image_data = data['image']
+        camera_id = data.get('cameraId', 1)  # Default to camera 1 (laptop camera)
+        
+        # Save image to file
+        captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
+        filename = f'capture_{camera_id}_{timestamp}.jpg'
+        filepath = os.path.join(captures_dir, filename)
+        
+        # Decode base64 image and save
+        try:
+            # Remove data URL prefix if present
+            if ',' in image_data:
+                image_data = image_data.split(',')[1]
+            
+            image_bytes = base64.b64decode(image_data)
+            with open(filepath, 'wb') as f:
+                f.write(image_bytes)
+        except Exception as e:
+            print(f"Error saving image: {e}")
+            filepath = None
+        
+        # Create a detection event in the database
+        detection = DetectionEvent(
+            camera_id=camera_id,
+            person_id=None,  # Will be set after face recognition
+            detection_type='face',
+            is_authorized=False,
+            confidence=0.0,  # Will be updated after processing
+            timestamp=datetime.utcnow(),
+            image_path=filename if filepath else None
+        )
+        
+        db.session.add(detection)
+        
+        # Log the event
+        log = SystemLog(
+            event_type='frame_captured',
+            description=f'Frame captured from camera {camera_id} and saved as {filename}',
+            severity='info',
+            created_at=datetime.utcnow()
+        )
+        db.session.add(log)
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Frame processed and saved successfully",
+            "detectionId": detection.id,
+            "filename": filename,
+            "timestamp": detection.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            "faces_detected": 0  # Will be updated when face detection is implemented
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error processing frame: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Get camera info
+@app.route('/api/cameras')
+def get_cameras():
+    try:
+        cameras = Camera.query.all()
+        
+        camera_list = []
+        for camera in cameras:
+            camera_list.append({
+                "id": camera.id,
+                "name": camera.name,
+                "location": camera.location,
+                "status": camera.status,
+                "rtspUrl": camera.rtsp_url,
+                "isActive": camera.is_active
+            })
+        
+        return jsonify(camera_list)
+    except Exception as e:
+        print(f"Error fetching cameras: {e}")
+        return jsonify(cameras_data)  # Fallback to sample data
+
+# Get all saved captures with pagination
+@app.route('/api/captures')
+def get_captures():
+    try:
+        # Get query parameters
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('perPage', 20))
+        camera_id = request.args.get('cameraId')
+        
+        # Query detection events with images
+        query = DetectionEvent.query.filter(DetectionEvent.image_path.isnot(None))
+        
+        if camera_id:
+            query = query.filter_by(camera_id=camera_id)
+        
+        # Order by newest first
+        query = query.order_by(DetectionEvent.timestamp.desc())
+        
+        # Paginate
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        captures = []
+        for detection in pagination.items:
+            captures.append({
+                "id": detection.id,
+                "cameraId": detection.camera_id,
+                "filename": detection.image_path,
+                "timestamp": detection.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                "date": detection.timestamp.strftime('%Y-%m-%d'),
+                "time": detection.timestamp.strftime('%H:%M:%S'),
+                "confidence": float(detection.confidence) if detection.confidence else 0,
+                "isAuthorized": detection.person_id is not None
+            })
+        
+        return jsonify({
+            "captures": captures,
+            "total": pagination.total,
+            "pages": pagination.pages,
+            "current_page": page,
+            "per_page": per_page
+        })
+        
+    except Exception as e:
+        print(f"Error fetching captures: {e}")
+        return jsonify({"captures": [], "total": 0}), 500
+
+# Serve capture image
+@app.route('/api/captures/<filename>')
+def serve_capture(filename):
+    try:
+        captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
+        filepath = os.path.join(captures_dir, filename)
+        
+        if os.path.exists(filepath):
+            return send_file(filepath, mimetype='image/jpeg')
+        else:
+            return jsonify({"error": "Image not found"}), 404
+            
+    except Exception as e:
+        print(f"Error serving capture: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Add/Update laptop camera
+@app.route('/api/cameras/laptop', methods=['POST'])
+def register_laptop_camera():
+    try:
+        # Check if laptop camera already exists
+        laptop_camera = Camera.query.filter_by(name='Laptop Camera').first()
+        
+        if not laptop_camera:
+            laptop_camera = Camera(
+                name='Laptop Camera',
+                location='Live Monitoring',
+                rtsp_url='webcam://0',
+                status='online',
+                is_active=True
+            )
+            db.session.add(laptop_camera)
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Laptop camera registered",
+                "cameraId": laptop_camera.id
+            })
+        else:
+            # Update status
+            laptop_camera.status = 'online'
+            laptop_camera.is_active = True
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Laptop camera updated",
+                "cameraId": laptop_camera.id
+            })
+            
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error registering laptop camera: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Update laptop camera status
+@app.route('/api/cameras/laptop/status', methods=['PUT'])
+def update_laptop_camera_status():
+    try:
+        data = request.get_json()
+        status = data.get('status', 'online')
+        
+        # Find laptop camera
+        laptop_camera = Camera.query.filter_by(name='Laptop Camera').first()
+        
+        if not laptop_camera:
+            return jsonify({"error": "Laptop camera not found"}), 404
+        
+        # Update status
+        laptop_camera.status = status
+        laptop_camera.is_active = (status == 'online')
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Camera status updated to {status}",
+            "cameraId": laptop_camera.id,
+            "status": status
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating camera status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Upload recorded video
+@app.route('/api/recordings/upload', methods=['POST'])
+def upload_recording():
+    try:
+        if 'video' not in request.files:
+            return jsonify({"error": "No video file provided"}), 400
+        
+        video_file = request.files['video']
+        duration = request.form.get('duration', 0)
+        
+        if video_file.filename == '':
+            return jsonify({"error": "No selected file"}), 400
+        
+        # Generate unique filename
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        filename = f'recording_{timestamp}.webm'
+        
+        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        filepath = os.path.join(recordings_dir, filename)
+        
+        # Save video file
+        video_file.save(filepath)
+        
+        # Log the recording
+        log = SystemLog(
+            event_type='video_recorded',
+            description=f'Video recording saved: {filename} (Duration: {duration}s)',
+            severity='info',
+            created_at=datetime.utcnow()
+        )
+        db.session.add(log)
+        db.session.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Video uploaded successfully",
+            "filename": filename,
+            "filepath": filepath,
+            "duration": duration
+        })
+        
+    except Exception as e:
+        print(f"Error uploading video: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Get all recordings
+@app.route('/api/recordings')
+def get_recordings():
+    try:
+        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        
+        if not os.path.exists(recordings_dir):
+            return jsonify({"recordings": [], "total": 0})
+        
+        recordings = []
+        for filename in os.listdir(recordings_dir):
+            if filename.endswith('.webm') or filename.endswith('.mp4'):
+                filepath = os.path.join(recordings_dir, filename)
+                stats = os.stat(filepath)
+                
+                # Extract timestamp from filename
+                timestamp_str = filename.replace('recording_', '').replace('.webm', '').replace('.mp4', '')
+                try:
+                    file_time = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
+                    formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    formatted_time = datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+                
+                recordings.append({
+                    "filename": filename,
+                    "size": stats.st_size,
+                    "sizeMB": round(stats.st_size / (1024 * 1024), 2),
+                    "created": formatted_time,
+                    "timestamp": stats.st_ctime
+                })
+        
+        # Sort by newest first
+        recordings.sort(key=lambda x: x['timestamp'], reverse=True)
+        
+        return jsonify({
+            "recordings": recordings,
+            "total": len(recordings),
+            "totalSizeMB": round(sum(r['size'] for r in recordings) / (1024 * 1024), 2)
+        })
+        
+    except Exception as e:
+        print(f"Error getting recordings: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Delete all recordings (Format) - MUST come BEFORE /<filename> route
+@app.route('/api/recordings/format', methods=['DELETE'])
+def format_recordings():
+    try:
+        print("📂 Formatting all recordings...")
+        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        
+        if not os.path.exists(recordings_dir):
+            print("⚠️ No recordings directory found")
+            return jsonify({"success": True, "message": "No recordings to delete", "deleted": 0})
+        
+        deleted_count = 0
+        failed_count = 0
+        errors = []
+        
+        for filename in os.listdir(recordings_dir):
+            if filename.endswith('.webm') or filename.endswith('.mp4'):
+                filepath = os.path.join(recordings_dir, filename)
+                try:
+                    os.remove(filepath)
+                    deleted_count += 1
+                    print(f"✅ Deleted: {filename}")
+                except PermissionError as pe:
+                    failed_count += 1
+                    error_msg = f"Permission denied: {filename}"
+                    errors.append(error_msg)
+                    print(f"❌ {error_msg}")
+                except Exception as e:
+                    failed_count += 1
+                    error_msg = f"Error deleting {filename}: {str(e)}"
+                    errors.append(error_msg)
+                    print(f"❌ {error_msg}")
+        
+        # Log the format action
+        log = SystemLog(
+            event_type='recordings_formatted',
+            description=f'Recordings deleted: {deleted_count} files, Failed: {failed_count}',
+            severity='warning',
+            created_at=datetime.utcnow()
+        )
+        db.session.add(log)
+        db.session.commit()
+        
+        message = f"Deleted {deleted_count} recording(s)"
+        if failed_count > 0:
+            message += f" ({failed_count} failed - files may be in use)"
+        
+        print(f"✅ Format complete: {message}")
+        
+        return jsonify({
+            "success": True,
+            "message": message,
+            "deleted": deleted_count,
+            "failed": failed_count,
+            "errors": errors
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error formatting recordings: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# Serve recording video
+@app.route('/api/recordings/<filename>')
+def serve_recording(filename):
+    try:
+        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        filepath = os.path.join(recordings_dir, filename)
+        
+        if os.path.exists(filepath):
+            return send_file(filepath, mimetype='video/webm')
+        else:
+            return jsonify({"error": "Video not found"}), 404
+            
+    except Exception as e:
+        print(f"Error serving recording: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Delete recording
+@app.route('/api/recordings/<filename>', methods=['DELETE'])
+def delete_recording(filename):
+    try:
+        print(f"Attempting to delete recording: {filename}")
+        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        filepath = os.path.join(recordings_dir, filename)
+        
+        print(f"Recordings directory: {recordings_dir}")
+        print(f"Full filepath: {filepath}")
+        print(f"File exists: {os.path.exists(filepath)}")
+        
+        if os.path.exists(filepath):
+            # Check if file is locked by another process
+            try:
+                os.remove(filepath)
+                print(f"✅ Successfully deleted: {filename}")
+            except PermissionError as pe:
+                print(f"❌ Permission error deleting file: {pe}")
+                return jsonify({"error": "File is in use or permission denied"}), 403
+            
+            # Log the deletion
+            log = SystemLog(
+                event_type='video_deleted',
+                description=f'Video recording deleted: {filename}',
+                severity='info',
+                created_at=datetime.utcnow()
+            )
+            db.session.add(log)
+            db.session.commit()
+            
+            return jsonify({"success": True, "message": "Recording deleted successfully"})
+        else:
+            print(f"❌ Video not found: {filename}")
+            return jsonify({"error": "Video not found"}), 404
+            
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error deleting recording: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

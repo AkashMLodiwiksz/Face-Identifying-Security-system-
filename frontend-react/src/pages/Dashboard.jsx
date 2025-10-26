@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Layout from '../components/Layout';
+import backgroundRecordingService from '../services/backgroundRecording';
 import { 
   Camera, 
   Users, 
@@ -23,9 +24,68 @@ const Dashboard = () => {
     detectionsToday: { total: 156, persons: 89, objects: 52, animals: 15 }
   });
 
+  const [recordingStatus, setRecordingStatus] = useState({
+    isRecording: false,
+    recordingTime: 0
+  });
+
+  // Auto-start recording if not already started (for direct dashboard access)
+  useEffect(() => {
+    const initializeRecording = async () => {
+      const status = backgroundRecordingService.getStatus();
+      
+      // If recording is not initialized, start it
+      if (!status.isInitialized) {
+        console.log('📍 Dashboard: Recording not started, initializing...');
+        try {
+          await backgroundRecordingService.start();
+          console.log('✅ Dashboard: Background recording started');
+        } catch (error) {
+          console.error('❌ Dashboard: Failed to start recording:', error);
+        }
+      } else {
+        console.log('✅ Dashboard: Recording already active');
+      }
+    };
+
+    initializeRecording();
+  }, []); // Run once on mount
+
+  // Check background recording status
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const status = backgroundRecordingService.getStatus();
+      setRecordingStatus({
+        isRecording: status.isRecording,
+        recordingTime: status.recordingTime
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Format recording time
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   return (
     <Layout>
       <div className="p-6 space-y-8">
+        {/* Compact Recording Status Indicator - No Controls */}
+        {recordingStatus.isRecording && (
+          <div className="bg-red-500 text-white px-4 py-2 rounded-lg flex items-center justify-between text-sm">
+            <div className="flex items-center space-x-2">
+              <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
+              <Video className="w-4 h-4" />
+              <span className="font-medium">Recording</span>
+            </div>
+            <span className="font-mono">{formatTime(recordingStatus.recordingTime)}</span>
+          </div>
+        )}
+
         {/* Main Stats Grid - Larger Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
           {/* Active Cameras - Detailed */}

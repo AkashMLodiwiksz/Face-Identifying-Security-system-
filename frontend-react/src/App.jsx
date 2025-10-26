@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -8,13 +8,38 @@ import AuthorizedPersons from './pages/AuthorizedPersons';
 import Alerts from './pages/Alerts';
 import Detections from './pages/Detections';
 import Cameras from './pages/Cameras';
+import Recordings from './pages/Recordings';
 import Settings from './pages/Settings';
+import backgroundRecordingService from './services/backgroundRecording';
 
 function App() {
   // Check if user is authenticated
   const isAuthenticated = () => {
     return localStorage.getItem('authToken') !== null;
   };
+
+  // Auto-start recording on app load if user is authenticated
+  useEffect(() => {
+    const initializeRecordingOnAppLoad = async () => {
+      if (isAuthenticated()) {
+        const status = backgroundRecordingService.getStatus();
+        
+        if (!status.isInitialized) {
+          console.log('📍 App: User authenticated but recording not started, initializing...');
+          try {
+            await backgroundRecordingService.start();
+            console.log('✅ App: Background recording started on app load');
+          } catch (error) {
+            console.error('❌ App: Failed to start recording on app load:', error);
+          }
+        } else {
+          console.log('✅ App: Recording already initialized');
+        }
+      }
+    };
+    
+    initializeRecordingOnAppLoad();
+  }, []);
 
   // Protected Route Component
   const ProtectedRoute = ({ children }) => {
@@ -82,6 +107,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <Cameras />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/recordings" 
+            element={
+              <ProtectedRoute>
+                <Recordings />
               </ProtectedRoute>
             } 
           />

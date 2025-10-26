@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
+import backgroundRecordingService from '../services/backgroundRecording';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -9,6 +10,7 @@ import {
   Eye,
   Settings,
   Video,
+  Film,
   Menu,
   X,
   LogOut,
@@ -25,6 +27,7 @@ const Layout = ({ children }) => {
   const menuItems = [
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/live-monitoring', icon: Camera, label: 'Live Monitoring' },
+    { path: '/recordings', icon: Film, label: 'Recordings' },
     { path: '/intruders', icon: UserX, label: 'Intruder Gallery' },
     { path: '/authorized-persons', icon: Users, label: 'Authorized Persons' },
     { path: '/alerts', icon: Bell, label: 'Alerts' },
@@ -34,6 +37,9 @@ const Layout = ({ children }) => {
   ];
 
   const handleLogout = () => {
+    // Stop background recording service
+    backgroundRecordingService.stop();
+    
     // Clear both localStorage and sessionStorage
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');

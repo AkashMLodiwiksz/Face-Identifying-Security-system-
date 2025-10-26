@@ -67,6 +67,7 @@ class Camera(db.Model):
     location = db.Column(db.String(200))
     rtsp_url = db.Column(db.String(500))
     camera_type = db.Column(db.String(20), default='IP')  # IP, USB, PTZ
+    status = db.Column(db.String(20), default='offline')  # online, offline
     is_active = db.Column(db.Boolean, default=True)
     is_ptz = db.Column(db.Boolean, default=False)
     fps = db.Column(db.Integer, default=30)

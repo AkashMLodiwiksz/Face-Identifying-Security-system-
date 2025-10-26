@@ -19,6 +19,9 @@ A modern, full-stack AI-powered security system with real-time face recognition,
 ### System Features
 - **Multi-Camera Support** - Manage multiple IP cameras with RTSP streaming
 - **Live Monitoring Dashboard** - Real-time video feeds and alerts
+- **🎥 Background Auto-Recording** - Automatic recording on login, runs system-wide
+- **Video Management** - 5-minute segments with playback, download, and delete
+- **Frame Capture System** - Automatic frame saving with database storage
 - **Intruder Database** - Track and analyze unauthorized access attempts
 - **Alert System** - Instant notifications for security events
 - **Personnel Management** - Add/remove authorized persons with face registration
@@ -235,12 +238,29 @@ This project is licensed under the MIT License.
 - [x] Database setup and models
 - [x] Frontend UI with React + Tailwind
 - [x] Dashboard with real-time stats
+- [x] Laptop camera integration
+- [x] Frame capture with database storage
+- [x] Video recording system (5-minute segments)
+- [x] Background auto-recording on login
 - [ ] Face detection integration
 - [ ] Face recognition implementation
 - [ ] Camera RTSP streaming
 - [ ] Real-time alerts
 - [ ] Mobile app (React Native)
 - [ ] Cloud deployment
+
+## 🎥 Recording System
+
+This system features an **automatic background recording service** that starts recording immediately upon login:
+
+- **Auto-starts on login** - No manual button needed
+- **Runs system-wide** - Works on all pages (Dashboard, Settings, etc.)
+- **5-minute segments** - Auto-saves and continues
+- **Background operation** - Continues when switching tabs
+- **Visual indicator** - Red banner on Dashboard shows status
+- **Auto-stops on logout** - Clean shutdown with final video saved
+
+See **[BACKGROUND_RECORDING.md](BACKGROUND_RECORDING.md)** for complete documentation.
 
 ---
 
