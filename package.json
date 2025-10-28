@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Face Recognition Security System with React Frontend and Flask Backend",
   "scripts": {
-    "dev": "concurrently \"npm run frontend\" \"npm run backend\"",
+    "dev": "start \"Flask Backend\" cmd /k \"cd backend && py app.py\" && timeout /t 2 >nul && cd frontend-react && npm run dev",
     "frontend": "cd frontend-react && npm run dev",
     "backend": "cd backend && py app.py",
     "install-all": "cd frontend-react && npm install && cd ../backend && py -m pip install -r requirements.txt",

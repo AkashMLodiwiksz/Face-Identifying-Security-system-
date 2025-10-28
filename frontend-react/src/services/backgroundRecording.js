@@ -129,9 +129,12 @@ class BackgroundRecordingService {
         const blob = new Blob(this.chunks, { type: 'video/webm' });
         await this.uploadVideo(blob);
         
-        // Auto-restart recording to create new segment ONLY if still recording
+        // Clear chunks
         this.chunks = [];
-        if (this.stream && this.isInitialized && this.isRecording) {
+        
+        // Auto-restart recording to create new segment (continuous recording)
+        if (this.stream && this.isInitialized) {
+          console.log('🔄 Restarting recording for next segment...');
           setTimeout(() => {
             this.startRecording();
           }, 500);
@@ -151,9 +154,9 @@ class BackgroundRecordingService {
 
       // Auto-stop and restart every 2 minutes to create manageable segments
       setTimeout(() => {
-        if (this.isRecording) {
+        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
           console.log('⏱️ 2 minutes reached, creating new segment...');
-          this.stopRecordingSegment();
+          this.mediaRecorder.stop(); // This will trigger onstop which restarts recording
         }
       }, 2 * 60 * 1000); // 2 minutes
 

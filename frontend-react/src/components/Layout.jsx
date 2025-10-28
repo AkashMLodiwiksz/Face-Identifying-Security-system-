@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import backgroundRecordingService from '../services/backgroundRecording';
+import LiveClock from './LiveClock';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -132,7 +133,10 @@ const Layout = ({ children }) => {
             {menuItems.find(item => item.path === location.pathname)?.label || 'Dashboard'}
           </h1>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-6">
+            {/* Live Clock */}
+            <LiveClock />
+
             {/* Notifications */}
             <button className="relative p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
               <Bell className="w-5 h-5" />

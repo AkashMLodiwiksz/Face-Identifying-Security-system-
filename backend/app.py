@@ -5,10 +5,17 @@ from models import db, User, Camera, DetectionEvent, SystemLog
 from dotenv import load_dotenv
 import os
 import base64
+import subprocess
 from io import BytesIO
 
 # Load environment variables
 load_dotenv()
+
+# Helper function to get recordings directory
+def get_recordings_dir():
+    """Get the recordings directory path using the current user's Videos folder"""
+    user_profile = os.environ.get('USERPROFILE')  # e.g., C:\Users\YourActualUsername
+    return os.path.join(user_profile, 'Videos', 'recordings')
 
 app = Flask(__name__)
 
@@ -47,11 +54,13 @@ with app.app_context():
         os.makedirs(captures_dir)
         print("[SUCCESS] Captures directory created")
     
-    # Create recordings directory if it doesn't exist
-    recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+    # Create recordings directory in user Videos folder
+    recordings_dir = get_recordings_dir()
     if not os.path.exists(recordings_dir):
         os.makedirs(recordings_dir)
-        print("[SUCCESS] Recordings directory created")
+        print(f"[SUCCESS] Recordings directory created at: {recordings_dir}")
+    else:
+        print(f"[INFO] Using recordings directory: {recordings_dir}")
 
 # Sample data (will be replaced with database)
 cameras_data = [
@@ -492,7 +501,8 @@ def upload_recording():
         timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
         filename = f'recording_{timestamp}.webm'
         
-        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        # Use recordings directory in user's Videos folder
+        recordings_dir = get_recordings_dir()
         filepath = os.path.join(recordings_dir, filename)
         
         # Save video file
@@ -520,14 +530,70 @@ def upload_recording():
         print(f"Error uploading video: {e}")
         return jsonify({"error": str(e)}), 500
 
+# Open recordings folder in file explorer
+@app.route('/api/recordings/open-folder', methods=['POST'])
+def open_recordings_folder():
+    # Use environment variable to get actual user's Videos folder
+    user_profile = os.environ.get('USERPROFILE')  # e.g., C:\Users\YourActualUsername
+    abs_path = os.path.join(user_profile, 'Videos', 'recordings')
+    
+    print("=" * 60)
+    print("[OPEN FOLDER] Request received")
+    print(f"[OPEN FOLDER] User Profile: {user_profile}")
+    print(f"[OPEN FOLDER] Opening: {abs_path}")
+    print("=" * 60)
+    
+    # Create directory if it doesn't exist (handle read-only parent folder)
+    try:
+        if not os.path.exists(abs_path):
+            os.makedirs(abs_path)
+            print("[SUCCESS] Created recordings directory")
+    except Exception as e:
+        print(f"[WARNING] Could not create directory: {e}")
+    
+    # Try multiple methods to open explorer
+    try:
+        # Method 1: os.startfile (most reliable for Windows)
+        os.startfile(abs_path)
+        print("[SUCCESS] Explorer opened with os.startfile")
+        
+        return jsonify({
+            "success": True,
+            "message": "Recordings folder opened",
+            "path": abs_path
+        })
+    except Exception as e:
+        print(f"[WARNING] os.startfile failed: {e}")
+        
+        # Method 2: subprocess.Popen with shell
+        try:
+            import subprocess
+            subprocess.Popen(f'explorer "{abs_path}"', shell=True)
+            print("[SUCCESS] Explorer opened with subprocess shell")
+            
+            return jsonify({
+                "success": True,
+                "message": "Recordings folder opened",
+                "path": abs_path
+            })
+        except Exception as e2:
+            print(f"[ERROR] All methods failed: {e2}")
+            return jsonify({
+                "success": False,
+                "error": f"Failed to open folder: {str(e)}",
+                "path": abs_path
+            }), 500
+
 # Get all recordings
 @app.route('/api/recordings')
 def get_recordings():
     try:
-        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        # Use recordings directory in user's Videos folder
+        recordings_dir = get_recordings_dir()
         
         if not os.path.exists(recordings_dir):
-            return jsonify({"recordings": [], "total": 0})
+            os.makedirs(recordings_dir)
+            return jsonify({"recordings": [], "total": 0, "totalSizeMB": 0})
         
         recordings = []
         for filename in os.listdir(recordings_dir):
@@ -568,11 +634,12 @@ def get_recordings():
 @app.route('/api/recordings/format', methods=['DELETE'])
 def format_recordings():
     try:
-        print("📂 Formatting all recordings...")
-        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        print("[FORMAT] Formatting all recordings...")
+        # Use recordings directory in user's Videos folder
+        recordings_dir = get_recordings_dir()
         
         if not os.path.exists(recordings_dir):
-            print("⚠️ No recordings directory found")
+            print("[WARNING] No recordings directory found")
             return jsonify({"success": True, "message": "No recordings to delete", "deleted": 0})
         
         deleted_count = 0
@@ -632,7 +699,8 @@ def format_recordings():
 @app.route('/api/recordings/<filename>')
 def serve_recording(filename):
     try:
-        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        # Use recordings directory in user's Videos folder
+        recordings_dir = get_recordings_dir()
         filepath = os.path.join(recordings_dir, filename)
         
         if os.path.exists(filepath):
@@ -649,7 +717,8 @@ def serve_recording(filename):
 def delete_recording(filename):
     try:
         print(f"Attempting to delete recording: {filename}")
-        recordings_dir = os.path.join(os.path.dirname(__file__), 'recordings')
+        # Use recordings directory in user's Videos folder
+        recordings_dir = get_recordings_dir()
         filepath = os.path.join(recordings_dir, filename)
         
         print(f"Recordings directory: {recordings_dir}")

@@ -93,56 +93,35 @@ const Recordings = () => {
     }
   };
 
-  const formatAllRecordings = async () => {
+  const refreshRecordings = () => {
+    fetchRecordings();
+    setToast({
+      isOpen: true,
+      type: 'success',
+      title: 'Refreshed',
+      message: 'Recordings list has been refreshed'
+    });
+  };
+
+  const openRecordingsFolder = async () => {
     try {
-      console.log('🛑 Stopping recording service before formatting...');
+      console.log('📂 Opening recordings folder...');
+      const response = await api.post('/recordings/open-folder');
+      console.log('✅ Folder opened:', response.data);
       
-      // Stop background recording to release file locks
-      const wasRecording = backgroundRecordingService.isRecording;
-      if (wasRecording) {
-        await backgroundRecordingService.pauseRecording();
-        console.log('✅ Recording paused to release file locks');
-        // Wait a moment for files to be fully released
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
-      console.log('📂 Formatting all recordings...');
-      const response = await api.delete('/recordings/format');
-      console.log('Format response:', response.data);
-      
-      // Show appropriate toast
-      if (response.data.failed > 0) {
-        setToast({
-          isOpen: true,
-          type: 'warning',
-          title: 'Partially Completed',
-          message: `✅ Deleted: ${response.data.deleted} files\n❌ Failed: ${response.data.failed} files (may be in use)\n\nTry closing any open videos and format again.`
-        });
-      } else {
-        setToast({
-          isOpen: true,
-          type: 'success',
-          title: 'All Recordings Deleted',
-          message: `Successfully deleted ${response.data.deleted} recording(s)`
-        });
-      }
-      
-      fetchRecordings();
-      
-      // Optionally restart recording if it was active
-      if (wasRecording) {
-        console.log('♻️ Restarting recording service...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await backgroundRecordingService.resumeRecording();
-      }
-      
+      setToast({
+        isOpen: true,
+        type: 'success',
+        title: 'Folder Opened',
+        message: 'Windows Explorer opened to recordings folder'
+      });
     } catch (error) {
-      console.error('Error formatting recordings:', error);
+      console.error('❌ Error opening folder:', error);
       setToast({
         isOpen: true,
         type: 'error',
-        title: 'Format Failed',
-        message: `Failed to delete recordings: ${error.message}`
+        title: 'Error',
+        message: 'Failed to open folder. Please navigate manually to C:\\Users\\user\\Videos\\recordings'
       });
     }
   };
@@ -299,11 +278,13 @@ const Recordings = () => {
             </p>
           </div>
           <button
-            onClick={() => setFormatModal({ isOpen: true, step: 1 })}
-            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 transition-colors"
+            onClick={refreshRecordings}
+            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors"
           >
-            <Trash2 className="w-4 h-4 mr-2" />
-            Format All
+            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh
           </button>
         </div>
 
@@ -341,9 +322,13 @@ const Recordings = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Location</p>
-                <p className="text-sm font-semibold text-gray-800 dark:text-white mt-1">
-                  /backend/recordings/
-                </p>
+                <button
+                  onClick={openRecordingsFolder}
+                  className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 mt-1 cursor-pointer hover:underline transition-colors text-left"
+                  title="Click to open folder in Windows Explorer"
+                >
+                  C:\Users\user\Videos\recordings
+                </button>
               </div>
               <div className="p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
                 <HardDrive className="w-6 h-6 text-purple-600 dark:text-purple-400" />
@@ -571,16 +556,10 @@ const Recordings = () => {
                       <a
                         href={`http://localhost:5000/api/recordings/${recording.filename}`}
                         download
-                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-4"
+                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
                       >
                         <Download className="w-5 h-5 inline" />
                       </a>
-                      <button
-                        onClick={() => setDeleteModal({ isOpen: true, filename: recording.filename })}
-                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
-                      >
-                        <Trash2 className="w-5 h-5 inline" />
-                      </button>
                     </td>
                   </tr>
                 ))}
