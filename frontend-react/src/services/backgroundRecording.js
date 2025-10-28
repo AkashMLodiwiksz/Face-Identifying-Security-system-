@@ -132,8 +132,8 @@ class BackgroundRecordingService {
         // Clear chunks
         this.chunks = [];
         
-        // Auto-restart recording to create new segment (continuous recording)
-        if (this.stream && this.isInitialized) {
+        // Auto-restart recording ONLY if still recording (not manually stopped)
+        if (this.stream && this.isInitialized && this.isRecording) {
           console.log('🔄 Restarting recording for next segment...');
           setTimeout(() => {
             this.startRecording();

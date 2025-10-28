@@ -43,16 +43,11 @@ const Recordings = () => {
     try {
       console.log('Deleting recording:', filename);
       
-      // If this is the currently recording file, we need to wait
-      const wasRecording = backgroundRecordingService.isRecording;
-      if (wasRecording) {
-        console.log('⏸️ Temporarily pausing recording...');
-        await backgroundRecordingService.pauseRecording();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
       const response = await api.delete(`/recordings/${filename}`);
       console.log('Delete response:', response.data);
+      
+      // Close modal
+      setDeleteModal({ isOpen: false, filename: null });
       
       // Show success toast
       setToast({
@@ -62,17 +57,14 @@ const Recordings = () => {
         message: `Recording "${filename}" has been deleted.`
       });
       
+      // Refresh recordings list
       fetchRecordings();
-      
-      // Resume recording if it was active
-      if (wasRecording) {
-        console.log('▶️ Resuming recording...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await backgroundRecordingService.resumeRecording();
-      }
       
     } catch (error) {
       console.error('Error deleting recording:', error);
+      
+      // Close modal
+      setDeleteModal({ isOpen: false, filename: null });
       
       // Show error toast
       if (error.response && error.response.status === 403) {
@@ -80,7 +72,7 @@ const Recordings = () => {
           isOpen: true,
           type: 'error',
           title: 'Cannot Delete',
-          message: 'File is currently in use.\n\nTry:\n• Stop the recording first\n• Close any open video players\n• Wait a moment and try again'
+          message: 'File is currently in use. Try stopping the recording first.'
         });
       } else {
         setToast({
@@ -122,6 +114,67 @@ const Recordings = () => {
         type: 'error',
         title: 'Error',
         message: 'Failed to open folder. Please navigate manually to C:\\Users\\user\\Videos\\recordings'
+      });
+    }
+  };
+
+  const formatAllRecordings = async () => {
+    try {
+      console.log('Formatting all recordings...');
+      
+      // Stop recording to release file locks
+      const wasRecording = backgroundRecordingService.isRecording;
+      if (wasRecording) {
+        console.log('Pausing recording...');
+        await backgroundRecordingService.pauseRecording();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      console.log('Calling API to delete all recordings...');
+      const response = await api.delete('/recordings/format');
+      console.log('Format response:', response.data);
+      
+      // Close modal first
+      setFormatModal({ isOpen: false, step: 1 });
+      
+      // Show toast based on result
+      if (response.data.failed && response.data.failed > 0) {
+        setToast({
+          isOpen: true,
+          type: 'warning',
+          title: 'Partially Completed',
+          message: `Deleted: ${response.data.deleted} files\nFailed: ${response.data.failed} files (may be in use)`
+        });
+      } else {
+        setToast({
+          isOpen: true,
+          type: 'success',
+          title: 'All Recordings Deleted',
+          message: `Successfully deleted ${response.data.deleted} recording(s)`
+        });
+      }
+      
+      // Refresh list
+      await fetchRecordings();
+      
+      // Resume recording if it was active
+      if (wasRecording) {
+        console.log('Resuming recording...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+        await backgroundRecordingService.resumeRecording();
+      }
+      
+    } catch (error) {
+      console.error('Error formatting recordings:', error);
+      
+      // Close modal
+      setFormatModal({ isOpen: false, step: 1 });
+      
+      setToast({
+        isOpen: true,
+        type: 'error',
+        title: 'Format Failed',
+        message: `Failed to delete recordings: ${error.message}`
       });
     }
   };
@@ -550,16 +603,25 @@ const Recordings = () => {
                       <button
                         onClick={() => playVideo(recording)}
                         className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 mr-4"
+                        title="Play Video"
                       >
                         <Play className="w-5 h-5 inline" />
                       </button>
                       <a
                         href={`http://localhost:5000/api/recordings/${recording.filename}`}
                         download
-                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300"
+                        className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-4"
+                        title="Download Video"
                       >
                         <Download className="w-5 h-5 inline" />
                       </a>
+                      <button
+                        onClick={() => setDeleteModal({ isOpen: true, filename: recording.filename })}
+                        className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
+                        title="Delete Video"
+                      >
+                        <Trash2 className="w-5 h-5 inline" />
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -607,10 +669,7 @@ const Recordings = () => {
       <ConfirmModal
         isOpen={formatModal.isOpen && formatModal.step === 2}
         onClose={() => setFormatModal({ isOpen: false, step: 1 })}
-        onConfirm={() => {
-          formatAllRecordings();
-          setFormatModal({ isOpen: false, step: 1 });
-        }}
+        onConfirm={formatAllRecordings}
         title="⚠️ FINAL WARNING"
         message="This action CANNOT be undone!\n\nAll video recordings will be permanently deleted.\n\nAre you 100% sure?"
         confirmText="Yes, Delete Everything"

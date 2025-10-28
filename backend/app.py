@@ -635,12 +635,11 @@ def get_recordings():
 def format_recordings():
     try:
         print("[FORMAT] Formatting all recordings...")
-        # Use recordings directory in user's Videos folder
         recordings_dir = get_recordings_dir()
         
         if not os.path.exists(recordings_dir):
             print("[WARNING] No recordings directory found")
-            return jsonify({"success": True, "message": "No recordings to delete", "deleted": 0})
+            return jsonify({"success": True, "message": "No recordings to delete", "deleted": 0, "failed": 0})
         
         deleted_count = 0
         failed_count = 0
@@ -652,33 +651,23 @@ def format_recordings():
                 try:
                     os.remove(filepath)
                     deleted_count += 1
-                    print(f"✅ Deleted: {filename}")
+                    print(f"[SUCCESS] Deleted: {filename}")
                 except PermissionError as pe:
                     failed_count += 1
                     error_msg = f"Permission denied: {filename}"
                     errors.append(error_msg)
-                    print(f"❌ {error_msg}")
+                    print(f"[ERROR] {error_msg}")
                 except Exception as e:
                     failed_count += 1
                     error_msg = f"Error deleting {filename}: {str(e)}"
                     errors.append(error_msg)
-                    print(f"❌ {error_msg}")
-        
-        # Log the format action
-        log = SystemLog(
-            event_type='recordings_formatted',
-            description=f'Recordings deleted: {deleted_count} files, Failed: {failed_count}',
-            severity='warning',
-            created_at=datetime.utcnow()
-        )
-        db.session.add(log)
-        db.session.commit()
+                    print(f"[ERROR] {error_msg}")
         
         message = f"Deleted {deleted_count} recording(s)"
         if failed_count > 0:
             message += f" ({failed_count} failed - files may be in use)"
         
-        print(f"✅ Format complete: {message}")
+        print(f"[SUCCESS] Format complete: {message}")
         
         return jsonify({
             "success": True,
@@ -689,14 +678,12 @@ def format_recordings():
         })
         
     except Exception as e:
-        db.session.rollback()
-        print(f"❌ Error formatting recordings: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[ERROR] Error formatting recordings: {e}")
+        return jsonify({"error": str(e)}), 500
         return jsonify({"error": str(e)}), 500
 
 # Serve recording video
-@app.route('/api/recordings/<filename>')
+@app.route('/api/recordings/<filename>', methods=['GET'])
 def serve_recording(filename):
     try:
         # Use recordings directory in user's Videos folder
@@ -717,7 +704,6 @@ def serve_recording(filename):
 def delete_recording(filename):
     try:
         print(f"Attempting to delete recording: {filename}")
-        # Use recordings directory in user's Videos folder
         recordings_dir = get_recordings_dir()
         filepath = os.path.join(recordings_dir, filename)
         
@@ -726,32 +712,22 @@ def delete_recording(filename):
         print(f"File exists: {os.path.exists(filepath)}")
         
         if os.path.exists(filepath):
-            # Check if file is locked by another process
             try:
                 os.remove(filepath)
-                print(f"✅ Successfully deleted: {filename}")
+                print(f"Successfully deleted: {filename}")
+                return jsonify({"success": True, "message": "Recording deleted successfully"})
             except PermissionError as pe:
-                print(f"❌ Permission error deleting file: {pe}")
+                print(f"Permission error: {pe}")
                 return jsonify({"error": "File is in use or permission denied"}), 403
-            
-            # Log the deletion
-            log = SystemLog(
-                event_type='video_deleted',
-                description=f'Video recording deleted: {filename}',
-                severity='info',
-                created_at=datetime.utcnow()
-            )
-            db.session.add(log)
-            db.session.commit()
-            
-            return jsonify({"success": True, "message": "Recording deleted successfully"})
+            except Exception as e:
+                print(f"Error deleting file: {e}")
+                return jsonify({"error": str(e)}), 500
         else:
-            print(f"❌ Video not found: {filename}")
+            print(f"Video not found: {filename}")
             return jsonify({"error": "Video not found"}), 404
             
     except Exception as e:
-        db.session.rollback()
-        print(f"❌ Error deleting recording: {e}")
+        print(f"Error in delete_recording: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
