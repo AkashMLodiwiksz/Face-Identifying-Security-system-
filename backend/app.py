@@ -64,12 +64,7 @@ with app.app_context():
 
 # Sample data (will be replaced with database)
 cameras_data = [
-    {"id": 1, "name": "Front Entrance", "status": "online", "fps": 30, "location": "Building A"},
-    {"id": 2, "name": "Back Door", "status": "online", "fps": 30, "location": "Building A"},
-    {"id": 3, "name": "Parking Lot", "status": "online", "fps": 25, "location": "Outdoor"},
-    {"id": 4, "name": "Reception Area", "status": "online", "fps": 30, "location": "Building B"},
-    {"id": 5, "name": "Hallway", "status": "online", "fps": 30, "location": "Building B"},
-    {"id": 6, "name": "Server Room", "status": "offline", "fps": 0, "location": "Building C"},
+    {"id": 1, "name": "Laptop Camera", "status": "online", "fps": 30, "location": "Local Device"}
 ]
 
 intruders_data = [
@@ -187,6 +182,11 @@ def dashboard_stats():
     })
 
 # Camera endpoints (legacy - keeping for backward compatibility)
+@app.route('/api/cameras', methods=['GET'])
+def get_cameras():
+    """Get all cameras with their status"""
+    return jsonify(cameras_data)
+
 @app.route('/api/cameras/<int:camera_id>')
 def get_camera(camera_id):
     camera = next((c for c in cameras_data if c['id'] == camera_id), None)
@@ -330,9 +330,9 @@ def process_frame():
         print(f"Error processing frame: {e}")
         return jsonify({"error": str(e)}), 500
 
-# Get camera info
-@app.route('/api/cameras')
-def get_cameras():
+# Get camera info from database (legacy endpoint - currently unused)
+@app.route('/api/cameras/database')
+def get_cameras_from_db():
     try:
         cameras = Camera.query.all()
         
@@ -730,6 +730,71 @@ def delete_recording(filename):
         print(f"Error in delete_recording: {e}")
         import traceback
         traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# Get real-time system health
+@app.route('/api/system/health', methods=['GET'])
+def get_system_health():
+    try:
+        import psutil
+        import platform
+        
+        # CPU usage
+        cpu_percent = psutil.cpu_percent(interval=1)
+        
+        # Memory usage
+        memory = psutil.virtual_memory()
+        memory_percent = memory.percent
+        memory_used_gb = round(memory.used / (1024**3), 2)
+        memory_total_gb = round(memory.total / (1024**3), 2)
+        
+        # Disk usage
+        disk = psutil.disk_usage('/')
+        disk_percent = disk.percent
+        disk_used_gb = round(disk.used / (1024**3), 2)
+        disk_total_gb = round(disk.total / (1024**3), 2)
+        
+        # Network IO
+        net_io = psutil.net_io_counters()
+        network_sent_mb = round(net_io.bytes_sent / (1024**2), 2)
+        network_recv_mb = round(net_io.bytes_recv / (1024**2), 2)
+        
+        # System info
+        system_info = {
+            'os': platform.system(),
+            'os_version': platform.version(),
+            'processor': platform.processor(),
+            'architecture': platform.machine()
+        }
+        
+        return jsonify({
+            'cpu': {
+                'percent': cpu_percent,
+                'cores': psutil.cpu_count()
+            },
+            'memory': {
+                'percent': memory_percent,
+                'used_gb': memory_used_gb,
+                'total_gb': memory_total_gb
+            },
+            'disk': {
+                'percent': disk_percent,
+                'used_gb': disk_used_gb,
+                'total_gb': disk_total_gb
+            },
+            'network': {
+                'sent_mb': network_sent_mb,
+                'recv_mb': network_recv_mb
+            },
+            'system': system_info
+        })
+        
+    except ImportError:
+        return jsonify({
+            'error': 'psutil not installed. Run: pip install psutil'
+        }), 500
+    except Exception as e:
+        print(f"Error getting system health: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':

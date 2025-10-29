@@ -24,10 +24,71 @@ const Dashboard = () => {
     detectionsToday: { total: 156, persons: 89, objects: 52, animals: 15 }
   });
 
+  const [cameras, setCameras] = useState([]);
+
+  const [systemHealth, setSystemHealth] = useState({
+    cpu: { percent: 0, cores: 0 },
+    memory: { percent: 0, used_gb: 0, total_gb: 0 },
+    disk: { percent: 0, used_gb: 0, total_gb: 0 },
+    network: { sent_mb: 0, recv_mb: 0 }
+  });
+
   const [recordingStatus, setRecordingStatus] = useState({
     isRecording: false,
     recordingTime: 0
   });
+
+  // Fetch camera data
+  useEffect(() => {
+    const fetchCameras = async () => {
+      try {
+        const response = await fetch('http://localhost:5000/api/cameras');
+        const data = await response.json();
+        setCameras(data);
+        
+        // Update stats based on actual camera data
+        const onlineCameras = data.filter(cam => cam.status === 'online').length;
+        const offlineCameras = data.length - onlineCameras;
+        
+        setStats(prev => ({
+          ...prev,
+          cameras: {
+            total: data.length,
+            online: onlineCameras,
+            offline: offlineCameras
+          }
+        }));
+      } catch (error) {
+        console.error('Error fetching cameras:', error);
+      }
+    };
+
+    fetchCameras();
+    // Refresh camera status every 10 seconds
+    const interval = setInterval(fetchCameras, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch system health data
+  useEffect(() => {
+    const fetchSystemHealth = async () => {
+      try {
+        const response = await fetch('http://localhost:5000/api/system/health');
+        const data = await response.json();
+        setSystemHealth(data);
+      } catch (error) {
+        console.error('Error fetching system health:', error);
+      }
+    };
+
+    // Fetch immediately
+    fetchSystemHealth();
+
+    // Then fetch every 3 seconds
+    const interval = setInterval(fetchSystemHealth, 3000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Auto-start recording if not already started (for direct dashboard access)
   useEffect(() => {
@@ -94,14 +155,24 @@ const Dashboard = () => {
               <div className="bg-white bg-opacity-20 p-3 rounded-xl">
                 <Camera className="w-8 h-8" />
               </div>
-              <div className="flex items-center space-x-1 bg-green-500 bg-opacity-30 px-3 py-1 rounded-full">
+              <div className={`flex items-center space-x-1 px-3 py-1 rounded-full ${
+                stats.cameras.total > 0 && stats.cameras.offline === 0
+                  ? 'bg-green-500 bg-opacity-30'
+                  : stats.cameras.online > 0
+                  ? 'bg-yellow-500 bg-opacity-30'
+                  : 'bg-red-500 bg-opacity-30'
+              }`}>
                 <TrendingUp className="w-4 h-4" />
-                <span className="text-xs font-semibold">100%</span>
+                <span className="text-xs font-semibold">
+                  {stats.cameras.total > 0 
+                    ? `${Math.round((stats.cameras.online / stats.cameras.total) * 100)}%` 
+                    : '0%'}
+                </span>
               </div>
             </div>
             <div>
               <p className="text-sm opacity-90 mb-1">Active Cameras</p>
-              <p className="text-4xl font-bold mb-3">{stats.cameras.total}</p>
+              <p className="text-4xl font-bold mb-3">{stats.cameras.online}</p>
               <div className="flex items-center justify-between text-xs opacity-90">
                 <span className="flex items-center">
                   <CheckCircle className="w-4 h-4 mr-1" /> {stats.cameras.online} Online
@@ -227,27 +298,44 @@ const Dashboard = () => {
                 <Video className="w-5 h-5 mr-2 text-blue-500" />
                 Camera Status
               </h3>
-              <span className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-semibold">
-                All Online
+              <span className={`text-xs px-3 py-1 rounded-full font-semibold ${
+                stats.cameras.offline === 0 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-yellow-100 text-yellow-700'
+              }`}>
+                {stats.cameras.offline === 0 ? 'All Online' : `${stats.cameras.offline} Offline`}
               </span>
             </div>
             <div className="space-y-3 overflow-y-auto scrollbar-thin flex-1 pr-2">
-              {[1, 2, 3, 4, 5, 6].map(cam => (
-                <div key={cam} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-                    <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Camera {cam}
-                    </span>
+              {cameras
+                .filter(cam => cam.status === 'online')
+                .map(cam => (
+                  <div key={cam.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                      <div>
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block">
+                          {cam.name}
+                        </span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {cam.location}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-3 text-xs text-gray-500">
+                      <span>{cam.fps} FPS</span>
+                      <span className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded">
+                        Active
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-3 text-xs text-gray-500">
-                    <span>30 FPS</span>
-                    <span className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded">
-                      Active
-                    </span>
-                  </div>
+                ))}
+              {cameras.filter(cam => cam.status === 'online').length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <Camera className="w-12 h-12 mb-2 opacity-50" />
+                  <p className="text-sm">No cameras online</p>
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
@@ -258,52 +346,106 @@ const Dashboard = () => {
                 <Activity className="w-5 h-5 mr-2 text-green-500" />
                 System Health
               </h3>
-              <span className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-semibold">
-                Healthy
+              <span className={`text-xs px-3 py-1 rounded-full font-semibold ${
+                systemHealth.cpu.percent < 80 && systemHealth.memory.percent < 80 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-yellow-100 text-yellow-700'
+              }`}>
+                {systemHealth.cpu.percent < 80 && systemHealth.memory.percent < 80 ? 'Healthy' : 'High Load'}
               </span>
             </div>
             <div className="space-y-4 overflow-y-auto scrollbar-thin flex-1 pr-2">
               {/* CPU */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">CPU Usage</span>
-                  <span className="text-sm font-bold text-green-600">42%</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    CPU Usage ({systemHealth.cpu.cores} cores)
+                  </span>
+                  <span className={`text-sm font-bold ${
+                    systemHealth.cpu.percent < 60 ? 'text-green-600' :
+                    systemHealth.cpu.percent < 80 ? 'text-yellow-600' : 'text-red-600'
+                  }`}>
+                    {Math.round(systemHealth.cpu.percent)}%
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                  <div className="bg-green-500 h-2 rounded-full" style={{ width: '42%' }}></div>
+                  <div 
+                    className={`h-2 rounded-full transition-all ${
+                      systemHealth.cpu.percent < 60 ? 'bg-green-500' :
+                      systemHealth.cpu.percent < 80 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${systemHealth.cpu.percent}%` }}
+                  ></div>
                 </div>
               </div>
 
               {/* Memory */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Memory</span>
-                  <span className="text-sm font-bold text-blue-600">68%</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Memory ({systemHealth.memory.used_gb}/{systemHealth.memory.total_gb} GB)
+                  </span>
+                  <span className={`text-sm font-bold ${
+                    systemHealth.memory.percent < 60 ? 'text-green-600' :
+                    systemHealth.memory.percent < 80 ? 'text-yellow-600' : 'text-red-600'
+                  }`}>
+                    {Math.round(systemHealth.memory.percent)}%
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                  <div className="bg-blue-500 h-2 rounded-full" style={{ width: '68%' }}></div>
+                  <div 
+                    className={`h-2 rounded-full transition-all ${
+                      systemHealth.memory.percent < 60 ? 'bg-blue-500' :
+                      systemHealth.memory.percent < 80 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${systemHealth.memory.percent}%` }}
+                  ></div>
                 </div>
               </div>
 
               {/* Storage */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Storage</span>
-                  <span className="text-sm font-bold text-yellow-600">55%</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Storage ({systemHealth.disk.used_gb}/{systemHealth.disk.total_gb} GB)
+                  </span>
+                  <span className={`text-sm font-bold ${
+                    systemHealth.disk.percent < 70 ? 'text-green-600' :
+                    systemHealth.disk.percent < 85 ? 'text-yellow-600' : 'text-red-600'
+                  }`}>
+                    {Math.round(systemHealth.disk.percent)}%
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                  <div className="bg-yellow-500 h-2 rounded-full" style={{ width: '55%' }}></div>
+                  <div 
+                    className={`h-2 rounded-full transition-all ${
+                      systemHealth.disk.percent < 70 ? 'bg-purple-500' :
+                      systemHealth.disk.percent < 85 ? 'bg-yellow-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${systemHealth.disk.percent}%` }}
+                  ></div>
                 </div>
               </div>
 
               {/* Network */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Network</span>
-                  <span className="text-sm font-bold text-purple-600">85%</span>
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Network Traffic
+                  </span>
+                  <span className="text-sm font-bold text-indigo-600">
+                    Active
+                  </span>
                 </div>
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                  <div className="bg-purple-500 h-2 rounded-full" style={{ width: '85%' }}></div>
+                <div className="flex items-center justify-between text-xs bg-gray-100 dark:bg-gray-700 p-2 rounded">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-green-600 font-bold">↑</span>
+                    <span className="text-gray-700 dark:text-gray-300">Sent: {systemHealth.network.sent_mb} MB</span>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-blue-600 font-bold">↓</span>
+                    <span className="text-gray-700 dark:text-gray-300">Recv: {systemHealth.network.recv_mb} MB</span>
+                  </div>
                 </div>
               </div>
             </div>
