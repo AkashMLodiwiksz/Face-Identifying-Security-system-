@@ -66,12 +66,13 @@ class Camera(db.Model):
     name = db.Column(db.String(100), nullable=False)
     location = db.Column(db.String(200))
     rtsp_url = db.Column(db.String(500))
-    camera_type = db.Column(db.String(20), default='IP')  # IP, USB, PTZ
+    camera_type = db.Column(db.String(20), default='IP')  # IP, USB, PTZ, CCTV
     status = db.Column(db.String(20), default='offline')  # online, offline
     is_active = db.Column(db.Boolean, default=True)
     is_ptz = db.Column(db.Boolean, default=False)
     fps = db.Column(db.Integer, default=30)
     resolution = db.Column(db.String(20), default='1920x1080')
+    username = db.Column(db.String(80), nullable=False)  # User who owns this camera
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships

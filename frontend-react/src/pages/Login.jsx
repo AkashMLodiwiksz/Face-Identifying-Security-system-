@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, Shield, Camera, Users, Bell } from 'lucide-react';
 import api from '../services/api';
 import backgroundRecordingService from '../services/backgroundRecording';
@@ -65,8 +65,8 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center p-4">
-      <div className="max-w-6xl w-full bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row animate-fade-in">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="max-w-6xl w-full bg-gray-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col md:flex-row animate-fade-in">
         {/* Left Side - Branding */}
         <div className="md:w-1/2 bg-gradient-primary p-12 text-white flex flex-col justify-center">
           <div className="mb-8">
@@ -113,20 +113,20 @@ export default function Login() {
         </div>
 
         {/* Right Side - Login Form */}
-        <div className="md:w-1/2 p-12 flex flex-col justify-center">
+        <div className="md:w-1/2 p-12 flex flex-col justify-center bg-gray-800">
           <div className="max-w-md w-full mx-auto">
-            <h2 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back</h2>
-            <p className="text-gray-600 mb-8">Sign in to access your security dashboard</p>
+            <h2 className="text-3xl font-bold text-white mb-2">Welcome Back</h2>
+            <p className="text-gray-300 mb-8">Sign in to access your security dashboard</p>
 
             <form onSubmit={handleSubmit} className="space-y-6">
               {error && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                <div className="bg-red-900 bg-opacity-20 border border-red-500 text-red-300 px-4 py-3 rounded-lg">
                   {error}
                 </div>
               )}
 
               <div>
-                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="username" className="block text-sm font-medium text-gray-300 mb-2">
                   Username
                 </label>
                 <input
@@ -134,7 +134,7 @@ export default function Login() {
                   id="username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-white placeholder-gray-400"
                   placeholder="Enter your username"
                   required
                   disabled={loading}
@@ -142,7 +142,7 @@ export default function Login() {
               </div>
 
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
                   Password
                 </label>
                 <input
@@ -150,7 +150,7 @@ export default function Login() {
                   id="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 placeholder-gray-400"
+                  className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent text-white placeholder-gray-400"
                   placeholder="Enter your password"
                   required
                   disabled={loading}
@@ -166,7 +166,7 @@ export default function Login() {
                   className="h-4 w-4 text-primary focus:ring-primary border-gray-300 rounded cursor-pointer"
                   disabled={loading}
                 />
-                <label htmlFor="rememberMe" className="ml-2 block text-sm text-gray-700 cursor-pointer">
+                <label htmlFor="rememberMe" className="ml-2 block text-sm text-gray-300 cursor-pointer">
                   Remember me for 30 days
                 </label>
               </div>
@@ -191,11 +191,11 @@ export default function Login() {
             </form>
 
             <div className="mt-6 text-center">
-              <p className="text-sm text-gray-600">
+              <p className="text-sm text-gray-400">
                 Need access?{' '}
-                <a href="#" className="text-primary font-semibold hover:underline">
+                <Link to="/signup" className="text-primary font-semibold hover:underline">
                   Create Account
-                </a>
+                </Link>
               </p>
             </div>
           </div>

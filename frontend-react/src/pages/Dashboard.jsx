@@ -42,24 +42,45 @@ const Dashboard = () => {
   useEffect(() => {
     const fetchCameras = async () => {
       try {
-        const response = await fetch('http://localhost:5000/api/cameras');
+        // Get username from storage
+        const username = localStorage.getItem('username') || sessionStorage.getItem('username');
+        
+        if (!username) {
+          console.warn('No username found in storage, using default stats');
+          // Use default stats if no username
+          setCameras([]);
+          return;
+        }
+
+        const response = await fetch(`http://localhost:5000/api/cameras?username=${username}`);
+        
+        if (!response.ok) {
+          console.warn('Failed to fetch cameras, using default stats');
+          setCameras([]);
+          return;
+        }
+
         const data = await response.json();
-        setCameras(data);
+        setCameras(Array.isArray(data) ? data : []);
         
         // Update stats based on actual camera data
-        const onlineCameras = data.filter(cam => cam.status === 'online').length;
-        const offlineCameras = data.length - onlineCameras;
-        
-        setStats(prev => ({
-          ...prev,
-          cameras: {
-            total: data.length,
-            online: onlineCameras,
-            offline: offlineCameras
-          }
-        }));
+        if (Array.isArray(data) && data.length > 0) {
+          const onlineCameras = data.filter(cam => cam.status === 'online').length;
+          const offlineCameras = data.length - onlineCameras;
+          
+          setStats(prev => ({
+            ...prev,
+            cameras: {
+              total: data.length,
+              online: onlineCameras,
+              offline: offlineCameras
+            }
+          }));
+        }
       } catch (error) {
         console.error('Error fetching cameras:', error);
+        // Continue with default stats on error
+        setCameras([]);
       }
     };
 
@@ -93,23 +114,31 @@ const Dashboard = () => {
   // Auto-start recording if not already started (for direct dashboard access)
   useEffect(() => {
     const initializeRecording = async () => {
-      const status = backgroundRecordingService.getStatus();
-      
-      // If recording is not initialized, start it
-      if (!status.isInitialized) {
-        console.log('📍 Dashboard: Recording not started, initializing...');
-        try {
-          await backgroundRecordingService.start();
-          console.log('✅ Dashboard: Background recording started');
-        } catch (error) {
-          console.error('❌ Dashboard: Failed to start recording:', error);
+      try {
+        const status = backgroundRecordingService.getStatus();
+        
+        // If recording is not initialized, start it
+        if (!status.isInitialized) {
+          console.log('📍 Dashboard: Recording not started, initializing...');
+          // Start recording asynchronously without blocking UI
+          backgroundRecordingService.start().catch(error => {
+            console.warn('⚠️ Dashboard: Background recording failed (camera may be in use):', error.message);
+            // Don't throw error, just log it - recording is optional
+          });
+        } else {
+          console.log('✅ Dashboard: Recording already active');
         }
-      } else {
-        console.log('✅ Dashboard: Recording already active');
+      } catch (error) {
+        console.error('❌ Dashboard: Error checking recording status:', error);
       }
     };
 
-    initializeRecording();
+    // Delay initialization slightly to let UI render first
+    const timer = setTimeout(() => {
+      initializeRecording();
+    }, 500);
+
+    return () => clearTimeout(timer);
   }, []); // Run once on mount
 
   // Check background recording status

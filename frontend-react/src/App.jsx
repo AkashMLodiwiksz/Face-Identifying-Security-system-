@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
+import Signup from './pages/Signup';
 import Dashboard from './pages/Dashboard';
 import LiveMonitoring from './pages/LiveMonitoring';
 import Intruders from './pages/Intruders';
@@ -22,23 +23,32 @@ function App() {
   useEffect(() => {
     const initializeRecordingOnAppLoad = async () => {
       if (isAuthenticated()) {
-        const status = backgroundRecordingService.getStatus();
-        
-        if (!status.isInitialized) {
-          console.log('📍 App: User authenticated but recording not started, initializing...');
-          try {
-            await backgroundRecordingService.start();
-            console.log('✅ App: Background recording started on app load');
-          } catch (error) {
-            console.error('❌ App: Failed to start recording on app load:', error);
+        try {
+          const status = backgroundRecordingService.getStatus();
+          
+          if (!status.isInitialized) {
+            console.log('📍 App: User authenticated but recording not started, initializing...');
+            // Start recording asynchronously without blocking UI
+            backgroundRecordingService.start().catch(error => {
+              console.warn('⚠️ App: Background recording failed (may need camera permission):', error.message);
+              // Don't block app loading if recording fails
+            });
+          } else {
+            console.log('✅ App: Recording already initialized');
           }
-        } else {
-          console.log('✅ App: Recording already initialized');
+        } catch (error) {
+          console.error('❌ App: Error initializing recording:', error);
+          // Don't block app loading
         }
       }
     };
     
-    initializeRecordingOnAppLoad();
+    // Delay slightly to ensure UI renders first
+    const timer = setTimeout(() => {
+      initializeRecordingOnAppLoad();
+    }, 1000);
+
+    return () => clearTimeout(timer);
   }, []);
 
   // Protected Route Component
@@ -50,8 +60,9 @@ function App() {
     <Router>
       <div className="App">
         <Routes>
-          {/* Public Route */}
+          {/* Public Routes */}
           <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
 
           {/* Protected Routes */}
           <Route 

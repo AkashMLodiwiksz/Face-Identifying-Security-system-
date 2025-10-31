@@ -1,7 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import WebcamCapture from '../components/WebcamCapture';
-import { Video, VideoOff, AlertTriangle, Calendar, Clock, Image as ImageIcon, Square, Play } from 'lucide-react';
+import RTSPCameraFeed from '../components/RTSPCameraFeed';
+import { 
+  Video, 
+  VideoOff, 
+  AlertTriangle, 
+  Calendar, 
+  Clock, 
+  Image as ImageIcon, 
+  Square, 
+  Play,
+  Wifi,
+  WifiOff,
+  Monitor,
+  Maximize2,
+  Grid3x3,
+  Grid2x2
+} from 'lucide-react';
 import api from '../services/api';
 import backgroundRecordingService from '../services/backgroundRecording';
 
@@ -13,6 +29,9 @@ const LiveMonitoring = () => {
   const [cameraId, setCameraId] = useState(null);
   const [savedCaptures, setSavedCaptures] = useState([]);
   const [totalCaptures, setTotalCaptures] = useState(0);
+  const [cameras, setCameras] = useState([]);
+  const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'single'
+  const [selectedCamera, setSelectedCamera] = useState(null);
   
   const [recordingStatus, setRecordingStatus] = useState({
     isRecording: false,
@@ -22,12 +41,48 @@ const LiveMonitoring = () => {
   // Create ref for WebcamCapture component
   const webcamRef = useRef(null);
 
-  // Register laptop camera when component mounts
+  // Get username
+  const username = localStorage.getItem('username') || sessionStorage.getItem('username');
+
+  // Fetch all cameras on mount
   useEffect(() => {
-    registerLaptopCamera();
+    fetchCameras();
     fetchDetections();
     fetchSavedCaptures();
   }, []);
+
+  // Fetch cameras
+  const fetchCameras = async () => {
+    try {
+      if (!username) {
+        console.warn('No username found');
+        return;
+      }
+
+      const response = await api.get(`/cameras?username=${username}`);
+      const cameraData = Array.isArray(response.data) ? response.data : [];
+      setCameras(cameraData);
+      
+      // Select first camera by default
+      if (cameraData.length > 0 && !selectedCamera) {
+        setSelectedCamera(cameraData[0]);
+      }
+
+      console.log('Loaded cameras:', cameraData);
+    } catch (error) {
+      console.error('Error fetching cameras:', error);
+      setCameras([]);
+    }
+  };
+
+  // Refresh camera list periodically to update status
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchCameras();
+    }, 5000); // Refresh every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [username]);
 
   // Check background recording status
   useEffect(() => {
@@ -94,18 +149,6 @@ const LiveMonitoring = () => {
       console.log('✅ Recording stopped from Live Monitoring');
     } catch (error) {
       console.error('❌ Failed to stop recording:', error);
-    }
-  };
-
-  const registerLaptopCamera = async () => {
-    try {
-      const response = await api.post('/cameras/laptop');
-      if (response.data.success) {
-        setCameraId(response.data.cameraId);
-        console.log('Laptop camera registered:', response.data.cameraId);
-      }
-    } catch (error) {
-      console.error('Error registering laptop camera:', error);
     }
   };
 
@@ -176,11 +219,31 @@ const LiveMonitoring = () => {
   return (
     <Layout>
       <div className="p-6">
-        <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Live Monitoring</h1>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Real-time face detection and recognition system
-          </p>
+        <div className="mb-6 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Live Monitoring</h1>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+              Real-time camera feeds - {cameras.length} camera{cameras.length !== 1 ? 's' : ''} connected
+            </p>
+          </div>
+          
+          {/* View Mode Toggle */}
+          <div className="flex items-center space-x-2 bg-white dark:bg-gray-800 rounded-lg p-1 shadow-md">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-2 rounded ${viewMode === 'grid' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              title="Grid View"
+            >
+              <Grid3x3 className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => setViewMode('single')}
+              className={`p-2 rounded ${viewMode === 'single' ? 'bg-blue-500 text-white' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+              title="Single View"
+            >
+              <Maximize2 className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Background Recording Status with Manual Controls */}
@@ -224,41 +287,193 @@ const LiveMonitoring = () => {
           </div>
         </div>
 
-        {/* Live Webcam Feed */}
-        <div className="mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-gray-800 dark:text-white">
-                Live Camera Feed
-              </h2>
-              <span className="flex items-center text-sm text-gray-600 dark:text-gray-400">
-                {isCameraStreaming ? (
-                  <>
-                    <span className="relative flex h-3 w-3 mr-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
-                    </span>
-                    Live
-                  </>
-                ) : (
-                  <>
-                    <span className="relative flex h-3 w-3 mr-2 bg-gray-400 rounded-full"></span>
-                    Offline
-                  </>
-                )}
-              </span>
-            </div>
-            <WebcamCapture 
-              ref={webcamRef}
-              onCapture={handleCapture} 
-              onStreamingChange={handleStreamingChange}
-            />
+        {/* Camera Feeds */}
+        {cameras.length === 0 ? (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-12 text-center">
+            <Video className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-2">
+              No Cameras Available
+            </h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              Add cameras from the Camera Management page to start monitoring
+            </p>
+            <button 
+              onClick={() => window.location.href = '/cameras'}
+              className="btn-primary"
+            >
+              Go to Camera Management
+            </button>
           </div>
-        </div>
+        ) : viewMode === 'grid' ? (
+          /* Grid View - All Cameras */
+          <div className="space-y-6">
+            {cameras.map((camera, index) => (
+              <div key={camera.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden isolate" style={{position: 'relative', zIndex: 1}}>
+                <div className="p-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Monitor className="w-5 h-5" />
+                      <div>
+                        <h3 className="font-semibold">{camera.name}</h3>
+                        <p className="text-xs opacity-90">{camera.location || 'No location set'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      {camera.status === 'online' ? (
+                        <Wifi className="w-5 h-5" />
+                      ) : (
+                        <WifiOff className="w-5 h-5 opacity-50" />
+                      )}
+                      <span className={`text-xs px-2 py-1 rounded ${
+                        camera.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                      }`}>
+                        {camera.status || 'offline'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="p-6">
+                  {camera.camera_type === 'USB' || camera.name.toLowerCase().includes('laptop') ? (
+                    /* Laptop/USB Camera - Show WebcamCapture */
+                    index === 0 ? (
+                      <div className="mb-4">
+                        <WebcamCapture 
+                          ref={webcamRef}
+                          onCapture={handleCapture} 
+                          onStreamingChange={handleStreamingChange}
+                        />
+                      </div>
+                    ) : (
+                      <div className="aspect-video bg-gray-900 rounded-lg flex items-center justify-center mb-4">
+                        <p className="text-gray-400 text-sm">Laptop camera shown in first position</p>
+                      </div>
+                    )
+                  ) : (
+                    /* CCTV/IP Camera - Show RTSP Stream with Controls */
+                    <div className="mb-4">
+                      <RTSPCameraFeed 
+                        camera={{...camera, ip: '192.168.137.189'}} 
+                        onStreamChange={(isStreaming) => {
+                          console.log(`Camera ${camera.name} streaming: ${isStreaming}`);
+                        }}
+                      />
+                    </div>
+                  )}
+                  
+                  <div className="mt-4 grid grid-cols-2 gap-4 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                    <div>
+                      <span className="font-semibold">Type:</span> {camera.camera_type}
+                    </div>
+                    <div>
+                      <span className="font-semibold">FPS:</span> {camera.fps}
+                    </div>
+                    <div className="col-span-2">
+                      <span className="font-semibold">Resolution:</span> {camera.resolution}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Single View - Selected Camera */
+          <div className="space-y-6">
+            {/* Camera Selector */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Select Camera
+              </label>
+              <select
+                value={selectedCamera?.id || ''}
+                onChange={(e) => {
+                  const cam = cameras.find(c => c.id === parseInt(e.target.value));
+                  setSelectedCamera(cam);
+                }}
+                className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              >
+                {cameras.map(camera => (
+                  <option key={camera.id} value={camera.id}>
+                    {camera.name} - {camera.location || 'No location'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Selected Camera Feed */}
+            {selectedCamera && (
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
+                <div className="p-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-3">
+                      <Monitor className="w-6 h-6" />
+                      <div>
+                        <h2 className="text-xl font-bold">{selectedCamera.name}</h2>
+                        <p className="text-sm opacity-90">{selectedCamera.location || 'No location set'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-3">
+                      {selectedCamera.status === 'online' ? (
+                        <Wifi className="w-6 h-6" />
+                      ) : (
+                        <WifiOff className="w-6 h-6 opacity-50" />
+                      )}
+                      <span className={`px-3 py-1 rounded text-sm font-semibold ${
+                        selectedCamera.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
+                      }`}>
+                        {selectedCamera.status || 'offline'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="p-6">
+                  {selectedCamera.camera_type === 'USB' || selectedCamera.name.toLowerCase().includes('laptop') ? (
+                    /* Laptop/USB Camera */
+                    <WebcamCapture 
+                      ref={webcamRef}
+                      onCapture={handleCapture} 
+                      onStreamingChange={handleStreamingChange}
+                    />
+                  ) : (
+                    /* CCTV/IP Camera - Show RTSP Stream with Full Controls */
+                    <RTSPCameraFeed 
+                      camera={{...selectedCamera, ip: '192.168.137.189'}} 
+                      onStreamChange={(isStreaming) => {
+                        console.log(`Camera ${selectedCamera.name} streaming: ${isStreaming}`);
+                      }}
+                    />
+                  )}
+                  
+                  <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Camera Type</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">{selectedCamera.camera_type}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Resolution</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">{selectedCamera.resolution}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">FPS</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">{selectedCamera.fps}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">PTZ</p>
+                      <p className="text-sm font-semibold text-gray-800 dark:text-white">
+                        {selectedCamera.is_ptz ? 'Enabled' : 'Disabled'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Stats Row */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 mt-6 relative" style={{zIndex: 10}}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Total Detections</p>
@@ -272,7 +487,7 @@ const LiveMonitoring = () => {
             </div>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Captured Frames</p>
@@ -286,7 +501,7 @@ const LiveMonitoring = () => {
             </div>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">System Status</p>

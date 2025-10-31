@@ -185,9 +185,18 @@ class BackgroundRecordingService {
    */
   async uploadVideo(blob) {
     try {
+      // Get username from localStorage
+      const username = localStorage.getItem('username');
+      
+      if (!username) {
+        console.error('❌ Username not found in localStorage');
+        return;
+      }
+      
       const formData = new FormData();
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       formData.append('video', blob, `background_recording_${timestamp}.webm`);
+      formData.append('username', username);  // Add username to form data
 
       const response = await fetch('http://localhost:5000/api/recordings/upload', {
         method: 'POST',
@@ -196,7 +205,7 @@ class BackgroundRecordingService {
 
       if (response.ok) {
         const result = await response.json();
-        console.log('✅ Background recording uploaded:', result.filename);
+        console.log(`✅ Background recording uploaded for user ${username}:`, result.filename);
       } else {
         console.error('❌ Failed to upload recording');
       }

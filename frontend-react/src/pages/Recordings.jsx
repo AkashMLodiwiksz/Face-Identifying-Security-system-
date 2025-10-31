@@ -29,7 +29,14 @@ const Recordings = () => {
   const fetchRecordings = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/recordings');
+      const username = localStorage.getItem('username');
+      
+      if (!username) {
+        console.error('Username not found');
+        return;
+      }
+      
+      const response = await api.get(`/recordings?username=${username}`);
       setRecordings(response.data.recordings);
       setTotalSize(response.data.totalSizeMB);
     } catch (error) {
@@ -43,7 +50,16 @@ const Recordings = () => {
     try {
       console.log('Deleting recording:', filename);
       
-      const response = await api.delete(`/recordings/${filename}`);
+      const username = localStorage.getItem('username');
+      
+      if (!username) {
+        console.error('Username not found');
+        return;
+      }
+      
+      const response = await api.delete(`/recordings/${filename}`, {
+        data: { username }
+      });
       console.log('Delete response:', response.data);
       
       // Close modal
@@ -98,14 +114,21 @@ const Recordings = () => {
   const openRecordingsFolder = async () => {
     try {
       console.log('📂 Opening recordings folder...');
-      const response = await api.post('/recordings/open-folder');
+      const username = localStorage.getItem('username');
+      
+      if (!username) {
+        console.error('Username not found');
+        return;
+      }
+      
+      const response = await api.post('/recordings/open-folder', { username });
       console.log('✅ Folder opened:', response.data);
       
       setToast({
         isOpen: true,
         type: 'success',
         title: 'Folder Opened',
-        message: 'Windows Explorer opened to recordings folder'
+        message: `Windows Explorer opened to ${username}'s recordings folder`
       });
     } catch (error) {
       console.error('❌ Error opening folder:', error);
@@ -113,7 +136,7 @@ const Recordings = () => {
         isOpen: true,
         type: 'error',
         title: 'Error',
-        message: 'Failed to open folder. Please navigate manually to C:\\Users\\user\\Videos\\recordings'
+        message: 'Failed to open folder. Please navigate manually to your recordings folder'
       });
     }
   };
@@ -121,6 +144,13 @@ const Recordings = () => {
   const formatAllRecordings = async () => {
     try {
       console.log('Formatting all recordings...');
+      
+      const username = localStorage.getItem('username');
+      
+      if (!username) {
+        console.error('Username not found');
+        return;
+      }
       
       // Stop recording to release file locks
       const wasRecording = backgroundRecordingService.isRecording;
@@ -131,7 +161,9 @@ const Recordings = () => {
       }
       
       console.log('Calling API to delete all recordings...');
-      const response = await api.delete('/recordings/format');
+      const response = await api.delete('/recordings/format', {
+        data: { username }
+      });
       console.log('Format response:', response.data);
       
       // Close modal first
@@ -419,7 +451,7 @@ const Recordings = () => {
               <video
                 ref={videoRef}
                 className="w-full"
-                src={`http://localhost:5000/api/recordings/${selectedVideo[currentSegmentIndex].filename}`}
+                src={`http://localhost:5000/api/recordings/${selectedVideo[currentSegmentIndex].filename}?username=${localStorage.getItem('username')}`}
                 onEnded={handleVideoEnded}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
@@ -608,7 +640,7 @@ const Recordings = () => {
                         <Play className="w-5 h-5 inline" />
                       </button>
                       <a
-                        href={`http://localhost:5000/api/recordings/${recording.filename}`}
+                        href={`http://localhost:5000/api/recordings/${recording.filename}?username=${localStorage.getItem('username')}`}
                         download
                         className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-4"
                         title="Download Video"
