@@ -17,10 +17,11 @@ import {
   ChevronRight,
   Home,
   RefreshCw,
-  Wifi
+  Wifi,
+  Camera
 } from 'lucide-react';
 
-const RTSPCameraFeed = ({ camera, onStreamChange }) => {
+const RTSPCameraFeed = ({ camera, onStreamChange, onCapture }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -204,24 +205,53 @@ const RTSPCameraFeed = ({ camera, onStreamChange }) => {
     }
   };
 
+  // Capture frame from CCTV camera
+  const handleCapture = () => {
+    const img = document.querySelector(`img[alt="Live Camera Feed"]`);
+    if (img) {
+      // Create canvas and capture current frame
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      
+      // Convert to blob and pass to parent
+      canvas.toBlob((blob) => {
+        if (blob && onCapture) {
+          const file = new File([blob], `capture_${camera.name}_${Date.now()}.jpg`, { type: 'image/jpeg' });
+          onCapture(file);
+        }
+      }, 'image/jpeg', 0.95);
+      
+      console.log(`Captured frame from ${camera.name}`);
+    }
+  };
+
   return (
     <div ref={containerRef} className="relative bg-gray-900 rounded-lg overflow-hidden isolate">
-      {/* Video Feed */}
-      <div className="aspect-video bg-black flex items-center justify-center relative isolate overflow-hidden">
+      {/* Video Feed - Extra tall container for maximum vertical stretch */}
+      <div className="w-full bg-black flex items-center justify-center relative isolate overflow-hidden" style={{ height: '500px' }}>
         {isConnecting ? (
-          <div className="flex flex-col items-center space-y-4 p-8">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
-            <p className="text-gray-400">Connecting to camera...</p>
+          <div className="flex flex-col items-center space-y-4 p-4">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+            <p className="text-gray-400 text-sm">Connecting...</p>
           </div>
         ) : isConnected ? (
           <>
-            {/* MJPEG Stream from Backend (FFmpeg transcoded) */}
+            {/* MJPEG Stream from Backend (OpenCV transcoded) */}
             <div className="w-full h-full relative bg-black">
-              {/* MJPEG Stream Image */}
+              {/* MJPEG Stream Image - Fill to stretch maximum vertically */}
               <img
                 src={`http://localhost:5000/api/cameras/${camera.id}/mjpeg-stream?username=${username}`}
                 alt="Live Camera Feed"
-                className="w-full h-full object-contain"
+                className="w-full h-full"
+                style={{ 
+                  objectFit: 'fill',
+                  width: '100%',
+                  height: '100%',
+                  transform: 'scaleY(1.2)'
+                }}
                 onLoad={() => {
                   console.log('MJPEG stream loaded successfully');
                   setSnapshotError(false);
@@ -428,94 +458,99 @@ const RTSPCameraFeed = ({ camera, onStreamChange }) => {
 
             {/* Zoom Controls */}
             {camera.is_ptz && (
-              <div className="space-y-3">
-                <h3 className="text-white font-semibold text-sm flex items-center">
-                  <ZoomIn className="w-4 h-4 mr-2" />
+              <div className="space-y-2">
+                <h3 className="text-white font-semibold text-xs flex items-center">
+                  <ZoomIn className="w-3 h-3 mr-1" />
                   Zoom
                 </h3>
                 <div className="flex space-x-2">
                   <button
                     onMouseDown={() => handleZoom('in')}
                     onMouseUp={handlePTZStop}
-                    className="flex-1 p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-all flex items-center justify-center space-x-2"
+                    className="flex-1 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-all flex items-center justify-center space-x-1 text-xs"
                   >
-                    <ZoomIn className="w-5 h-5" />
-                    <span>Zoom In</span>
+                    <ZoomIn className="w-4 h-4" />
+                    <span>In</span>
                   </button>
                   <button
                     onMouseDown={() => handleZoom('out')}
                     onMouseUp={handlePTZStop}
-                    className="flex-1 p-3 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-all flex items-center justify-center space-x-2"
+                    className="flex-1 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white transition-all flex items-center justify-center space-x-1 text-xs"
                   >
-                    <ZoomOut className="w-5 h-5" />
-                    <span>Zoom Out</span>
+                    <ZoomOut className="w-4 h-4" />
+                    <span>Out</span>
                   </button>
                 </div>
               </div>
             )}
 
             {/* Night Vision / Full Color Mode */}
-            <div className="space-y-3">
-              <h3 className="text-white font-semibold text-sm flex items-center">
-                <Moon className="w-4 h-4 mr-2" />
+            <div className="space-y-2">
+              <h3 className="text-white font-semibold text-xs flex items-center">
+                <Moon className="w-3 h-3 mr-1" />
                 Vision Mode
               </h3>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   onClick={() => handleNightVisionChange('auto')}
-                  className={`p-3 rounded-lg transition-all flex flex-col items-center space-y-1 ${
+                  className={`p-2 rounded-lg transition-all flex flex-col items-center space-y-1 ${
                     nightVisionMode === 'auto'
                       ? 'bg-blue-500 text-white'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  <Sunrise className="w-5 h-5" />
+                  <Sunrise className="w-4 h-4" />
                   <span className="text-xs">Auto</span>
                 </button>
                 <button
                   onClick={() => handleNightVisionChange('ir')}
-                  className={`p-3 rounded-lg transition-all flex flex-col items-center space-y-1 ${
+                  className={`p-2 rounded-lg transition-all flex flex-col items-center space-y-1 ${
                     nightVisionMode === 'ir'
                       ? 'bg-purple-500 text-white'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  <Moon className="w-5 h-5" />
+                  <Moon className="w-4 h-4" />
                   <span className="text-xs">Night</span>
                 </button>
                 <button
                   onClick={() => handleNightVisionChange('color')}
-                  className={`p-3 rounded-lg transition-all flex flex-col items-center space-y-1 ${
+                  className={`p-2 rounded-lg transition-all flex flex-col items-center space-y-1 ${
                     nightVisionMode === 'color'
                       ? 'bg-yellow-500 text-white'
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  <Sun className="w-5 h-5" />
+                  <Sun className="w-4 h-4" />
                   <span className="text-xs">Color</span>
                 </button>
               </div>
             </div>
           </div>
 
-          {/* Stream Actions */}
-          <div className="mt-4 flex items-center justify-between pt-4 border-t border-gray-700">
-            <div className="flex items-center space-x-4 text-sm text-gray-400">
-              <span>Resolution: {camera.resolution}</span>
+          {/* Stream Actions - More Compact */}
+          <div className="mt-3 flex items-center justify-between pt-3 border-t border-gray-700">
+            <div className="flex items-center space-x-2 text-xs text-gray-400">
+              <span>{camera.resolution}</span>
               <span>•</span>
-              <span>FPS: {camera.fps}</span>
-              <span>•</span>
-              <span className={`flex items-center ${nightVisionMode === 'color' ? 'text-yellow-400' : nightVisionMode === 'ir' ? 'text-purple-400' : 'text-blue-400'}`}>
-                {nightVisionMode === 'color' ? 'Full Color' : nightVisionMode === 'ir' ? 'Night Vision' : 'Auto Mode'}
-              </span>
+              <span>{camera.fps}fps</span>
             </div>
-            <button
-              onClick={handleDisconnect}
-              className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center space-x-2"
-            >
-              <VideoOff className="w-4 h-4" />
-              <span>Disconnect</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleCapture}
+                className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded text-xs transition-colors flex items-center space-x-1"
+              >
+                <Camera className="w-3 h-3" />
+                <span>Capture</span>
+              </button>
+              <button
+                onClick={handleDisconnect}
+                className="px-3 py-1 bg-red-500 hover:bg-red-600 text-white rounded text-xs transition-colors flex items-center space-x-1"
+              >
+                <VideoOff className="w-3 h-3" />
+                <span>Stop</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

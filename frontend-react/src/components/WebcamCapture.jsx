@@ -208,58 +208,74 @@ const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = tru
   }, []);
 
   return (
-    <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ minHeight: '400px' }}>
-      {/* Video Element */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted
-        className="w-full h-auto"
-        style={{ transform: 'scaleX(-1)' }}
-        onError={(e) => {
-          console.error('Video element error:', e);
-          setError('Video playback error. Please try restarting the camera.');
-        }}
-      />
+    <div className="space-y-3">
+      {/* Video Feed Container */}
+      <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ minHeight: '400px' }}>
+        {/* Video Element */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-auto"
+          style={{ transform: 'scaleX(-1)' }}
+          onError={(e) => {
+            console.error('Video element error:', e);
+            setError('Video playback error. Please try restarting the camera.');
+          }}
+        />
 
-      {/* Error Overlay */}
-      {error && (
-        <div className="absolute inset-0 bg-red-900 bg-opacity-80 flex items-center justify-center">
-          <div className="text-center text-white p-6">
-            <AlertCircle className="w-12 h-12 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Camera Error</h3>
-            <p className="text-sm mb-4">{error}</p>
-            <button
-              onClick={startCamera}
-              className="bg-white text-red-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors"
-            >
-              <RefreshCw className="w-4 h-4 inline mr-2" />
-              Retry
-            </button>
+        {/* Error Overlay */}
+        {error && (
+          <div className="absolute inset-0 bg-red-900 bg-opacity-80 flex items-center justify-center">
+            <div className="text-center text-white p-6">
+              <AlertCircle className="w-12 h-12 mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">Camera Error</h3>
+              <p className="text-sm mb-4">{error}</p>
+              <button
+                onClick={startCamera}
+                className="bg-white text-red-900 px-4 py-2 rounded-lg font-medium hover:bg-gray-100 transition-colors"
+              >
+                <RefreshCw className="w-4 h-4 inline mr-2" />
+                Retry
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* No Stream Overlay */}
-      {!isStreaming && !error && (
-        <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
-          <div className="text-center text-gray-400">
-            <VideoOff className="w-12 h-12 mx-auto mb-4" />
-            <p>Camera is off</p>
+        {/* No Stream Overlay */}
+        {!isStreaming && !error && (
+          <div className="absolute inset-0 bg-gray-800 flex items-center justify-center">
+            <div className="text-center text-gray-400">
+              <VideoOff className="w-12 h-12 mx-auto mb-4" />
+              <p>Camera is off</p>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Controls Overlay - Camera Selector and Capture Only */}
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black to-transparent p-4">
+        {/* Live indicator */}
+        {isStreaming && (
+          <div className="absolute top-4 left-4 z-10">
+            <div className="flex items-center space-x-2 bg-green-500 bg-opacity-95 px-3 py-1.5 rounded-full shadow-lg">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+              </span>
+              <span className="text-white text-sm font-semibold">LIVE</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Controls Below Video - Outside the feed */}
+      <div className="bg-gray-800 rounded-lg p-3">
         <div className="flex items-center justify-between">
           {/* Camera Selector */}
           {devices.length > 1 && (
             <select
               value={deviceId || ''}
               onChange={(e) => setDeviceId(e.target.value)}
-              className="bg-gray-800 text-white px-3 py-2 rounded-lg text-sm border border-gray-700 focus:outline-none focus:ring-2 focus:ring-primary"
+              className="bg-gray-700 text-white px-3 py-2 rounded-lg text-xs border border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               {devices.map((device, index) => (
                 <option key={device.deviceId} value={device.deviceId}>
@@ -269,21 +285,11 @@ const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = tru
             </select>
           )}
 
-          {/* Status */}
-          <div className="flex items-center space-x-4">
-            {isStreaming && (
-              <div className="flex items-center space-x-2 text-white">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                <span className="text-sm">Live Camera Feed</span>
-              </div>
-            )}
-          </div>
-
-          {/* Capture Button Only */}
+          {/* Capture Button */}
           {isStreaming && (
             <button
               onClick={captureFrame}
-              className="bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center"
+              className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center text-xs ml-auto"
             >
               <Camera className="w-4 h-4 mr-2" />
               Capture

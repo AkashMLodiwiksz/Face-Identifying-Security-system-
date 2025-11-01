@@ -29,6 +29,32 @@ class BackgroundRecordingService {
 
     try {
       console.log('🎬 Starting background recording service...');
+      
+      // Check if user has any webcam cameras in database
+      const username = localStorage.getItem('username');
+      if (!username) {
+        console.log('⚠️ No username found, skipping background recording');
+        return;
+      }
+
+      const response = await fetch(`http://localhost:5000/api/cameras?username=${username}`);
+      if (response.ok) {
+        const cameras = await response.json();
+        const webcamCameras = cameras.filter(cam => 
+          cam.camera_type === 'USB' || 
+          cam.camera_type === 'Webcam' || 
+          cam.name.toLowerCase().includes('laptop')
+        );
+        
+        if (webcamCameras.length === 0) {
+          console.log('⚠️ No webcam cameras found in database, skipping background recording');
+          console.log('ℹ️ Add a laptop camera from Camera Management to enable recording');
+          return;
+        }
+        
+        console.log(`✅ Found ${webcamCameras.length} webcam camera(s), starting recording...`);
+      }
+      
       console.log('📍 Requesting camera access...');
       
       // Get camera access
@@ -46,6 +72,9 @@ class BackgroundRecordingService {
       
       // Register laptop camera with backend
       await this.registerCamera();
+      
+      // Update camera status to online
+      await this.updateCameraStatus('online');
       
       // Start recording after short delay
       console.log('📍 Starting recording in 1 second...');
@@ -283,19 +312,27 @@ class BackgroundRecordingService {
    */
   async updateCameraStatus(status) {
     try {
+      const username = localStorage.getItem('username') || 'admin';
+      
       const response = await fetch('http://localhost:5000/api/cameras/laptop/status', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ status })
+        body: JSON.stringify({ 
+          status,
+          username 
+        })
       });
 
       if (response.ok) {
-        console.log(`✅ Camera status updated to: ${status}`);
+        const data = await response.json();
+        console.log(`✅ Camera status updated to ${status}:`, data.cameraName);
+      } else {
+        console.error('⚠️ Failed to update camera status:', await response.text());
       }
     } catch (error) {
-      console.error('❌ Failed to update camera status:', error);
+      console.error('⚠️ Error updating camera status:', error);
     }
   }
 

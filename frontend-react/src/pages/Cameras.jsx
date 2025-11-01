@@ -25,6 +25,7 @@ const Cameras = () => {
   const [editingCamera, setEditingCamera] = useState(null);
   const [toast, setToast] = useState({ isOpen: false, type: 'success', title: '', message: '' });
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(null);
+  const [availableWebcams, setAvailableWebcams] = useState([]);
   const [formData, setFormData] = useState({
     name: '',
     location: '',
@@ -32,7 +33,8 @@ const Cameras = () => {
     camera_type: 'IP',
     fps: 30,
     resolution: '1920x1080',
-    is_ptz: false
+    is_ptz: false,
+    ip_address: ''
   });
   const [testingConnection, setTestingConnection] = useState(null);
 
@@ -41,6 +43,24 @@ const Cameras = () => {
   useEffect(() => {
     fetchCameras();
   }, []);
+
+  // Get available webcams when modal opens
+  useEffect(() => {
+    if (showAddModal) {
+      getAvailableWebcams();
+    }
+  }, [showAddModal]);
+
+  const getAvailableWebcams = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter(device => device.kind === 'videoinput');
+      setAvailableWebcams(videoDevices);
+    } catch (error) {
+      console.error('Error getting webcams:', error);
+      setAvailableWebcams([]);
+    }
+  };
 
   const fetchCameras = async () => {
     try {
@@ -55,10 +75,31 @@ const Cameras = () => {
 
   const handleInputChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => {
+      const updated = {
+        ...prev,
+        [name]: type === 'checkbox' ? checked : value
+      };
+      
+      // Auto-generate RTSP URL when IP address changes for IP cameras
+      if (name === 'ip_address' && updated.camera_type === 'IP') {
+        // Format: rtsp://admin:admin@IP:554/onvif1 (for P6-QQ6 cameras)
+        updated.rtsp_url = value ? `rtsp://admin:admin@${value}:554/onvif1` : '';
+      }
+      
+      // Handle camera type change
+      if (name === 'camera_type') {
+        if (value === 'Webcam') {
+          updated.ip_address = '';
+          updated.rtsp_url = 'webcam://0'; // Default to first webcam
+          updated.is_ptz = false; // Disable PTZ for webcams
+        } else if (value === 'IP') {
+          updated.rtsp_url = '';
+        }
+      }
+      
+      return updated;
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -78,23 +119,43 @@ const Cameras = () => {
           message: `Camera "${formData.name}" has been updated successfully.`
         });
       } else {
-        // Add new camera
-        await api.post('/cameras', {
+        // Add new camera - set status to online for webcams
+        const cameraData = {
           ...formData,
-          username
-        });
+          username,
+          // Set webcam cameras as online by default
+          status: (formData.camera_type === 'Webcam' || formData.camera_type === 'USB') ? 'online' : formData.status
+        };
+        
+        await api.post('/cameras', cameraData);
         setToast({
           isOpen: true,
           type: 'success',
           title: 'Camera Added!',
           message: `Camera "${formData.name}" has been added successfully.`
         });
+        
+        // Start background recording if it's a webcam
+        if (formData.camera_type === 'Webcam' || formData.camera_type === 'USB') {
+          try {
+            const backgroundRecordingService = (await import('../services/backgroundRecording')).default;
+            await backgroundRecordingService.start();
+            console.log('✅ Background recording started after adding webcam');
+          } catch (error) {
+            console.warn('⚠️ Could not start recording:', error);
+          }
+        }
       }
       
       setShowAddModal(false);
       setEditingCamera(null);
       resetForm();
-      fetchCameras();
+      await fetchCameras();
+      
+      // Reload page to refresh all components
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
     } catch (error) {
       console.error('Error saving camera:', error);
       setToast({
@@ -108,6 +169,16 @@ const Cameras = () => {
 
   const handleEdit = (camera) => {
     setEditingCamera(camera);
+    
+    // Extract IP address from RTSP URL if it's an IP camera
+    let extractedIp = '';
+    if (camera.camera_type === 'IP' && camera.rtsp_url) {
+      const match = camera.rtsp_url.match(/@([\d.]+):/);
+      if (match) {
+        extractedIp = match[1];
+      }
+    }
+    
     setFormData({
       name: camera.name,
       location: camera.location,
@@ -115,7 +186,8 @@ const Cameras = () => {
       camera_type: camera.camera_type,
       fps: camera.fps,
       resolution: camera.resolution,
-      is_ptz: camera.is_ptz
+      is_ptz: camera.is_ptz,
+      ip_address: extractedIp
     });
     setShowAddModal(true);
   };
@@ -137,7 +209,14 @@ const Cameras = () => {
         title: 'Camera Deleted!',
         message: 'The camera has been deleted successfully.'
       });
-      fetchCameras();
+      
+      // Refresh the cameras list
+      await fetchCameras();
+      
+      // Reload the page to refresh all components and stop any active streams
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
     } catch (error) {
       console.error('Error deleting camera:', error);
       setToast({
@@ -184,7 +263,8 @@ const Cameras = () => {
       camera_type: 'IP',
       fps: 30,
       resolution: '1920x1080',
-      is_ptz: false
+      is_ptz: false,
+      ip_address: ''
     });
   };
 
@@ -391,42 +471,96 @@ const Cameras = () => {
                     </div>
                   </div>
 
+                  {/* Camera Type - Moved to top */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      RTSP URL / IP Address *
+                      Camera Type *
                     </label>
-                    <input
-                      type="text"
-                      name="rtsp_url"
-                      value={formData.rtsp_url}
+                    <select
+                      name="camera_type"
+                      value={formData.camera_type}
                       onChange={handleInputChange}
-                      required
-                      placeholder="rtsp://admin:password@192.168.1.100:554/stream"
                       className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                    />
+                    >
+                      <option value="IP">IP Camera / CCTV</option>
+                      <option value="Webcam">Webcam (Laptop Camera)</option>
+                    </select>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Format: rtsp://username:password@ip:port/path
+                      Select IP Camera for network CCTV cameras, or Webcam for built-in cameras
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* IP Address Field - Only show for IP cameras */}
+                  {formData.camera_type === 'IP' && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        Camera Type
+                        Camera IP Address *
+                      </label>
+                      <input
+                        type="text"
+                        name="ip_address"
+                        value={formData.ip_address}
+                        onChange={handleInputChange}
+                        required={formData.camera_type === 'IP'}
+                        placeholder="e.g., 192.168.137.189"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                      />
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Enter the IP address of your camera (RTSP URL will be auto-generated)
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Webcam Selector - Only show for Webcam type */}
+                  {formData.camera_type === 'Webcam' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Select Webcam *
                       </label>
                       <select
-                        name="camera_type"
-                        value={formData.camera_type}
+                        name="rtsp_url"
+                        value={formData.rtsp_url}
                         onChange={handleInputChange}
+                        required
                         className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
                       >
-                        <option value="IP">IP Camera</option>
-                        <option value="CCTV">CCTV</option>
-                        <option value="USB">USB Camera</option>
-                        <option value="PTZ">PTZ Camera</option>
+                        {availableWebcams.length > 0 ? (
+                          availableWebcams.map((device, index) => (
+                            <option key={device.deviceId} value={`webcam://${index}`}>
+                              {device.label || `Webcam ${index + 1}`}
+                            </option>
+                          ))
+                        ) : (
+                          <option value="webcam://0">Default Webcam</option>
+                        )}
                       </select>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Choose from available webcams on your computer
+                      </p>
                     </div>
+                  )}
 
+                  {/* RTSP URL - Auto-generated for IP, hidden for Webcam */}
+                  {formData.camera_type === 'IP' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        RTSP URL (Auto-generated)
+                      </label>
+                      <input
+                        type="text"
+                        name="rtsp_url"
+                        value={formData.rtsp_url}
+                        readOnly
+                        placeholder="Will be generated from IP address"
+                        className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 bg-gray-100 dark:bg-gray-900 dark:text-white cursor-not-allowed"
+                      />
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        Format: rtsp://admin:admin@[IP]:554/onvif1
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                         Resolution
@@ -441,6 +575,7 @@ const Cameras = () => {
                         <option value="1280x720">1280x720 (HD)</option>
                         <option value="1920x1080">1920x1080 (FHD)</option>
                         <option value="2560x1440">2560x1440 (QHD)</option>
+                        <option value="2592x2304">2592x2304 (6MP)</option>
                         <option value="3840x2160">3840x2160 (4K)</option>
                       </select>
                     </div>
@@ -461,18 +596,21 @@ const Cameras = () => {
                     </div>
                   </div>
 
-                  <div className="flex items-center">
-                    <input
-                      type="checkbox"
-                      name="is_ptz"
-                      checked={formData.is_ptz}
-                      onChange={handleInputChange}
-                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
-                    />
-                    <label className="ml-2 text-sm text-gray-700 dark:text-gray-300">
-                      Enable PTZ (Pan-Tilt-Zoom) Controls
-                    </label>
-                  </div>
+                  {/* PTZ Controls - Only show for IP cameras */}
+                  {formData.camera_type === 'IP' && (
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        name="is_ptz"
+                        checked={formData.is_ptz}
+                        onChange={handleInputChange}
+                        className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                      />
+                      <label className="ml-2 text-sm text-gray-700 dark:text-gray-300">
+                        Enable PTZ (Pan-Tilt-Zoom) Controls
+                      </label>
+                    </div>
+                  )}
 
                   <div className="flex space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
                     <button

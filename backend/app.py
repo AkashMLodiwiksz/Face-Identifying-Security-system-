@@ -378,12 +378,16 @@ def manage_cameras():
             return jsonify({"error": "User not found"}), 404
         
         # Create new camera
+        camera_type = data.get('camera_type', 'IP')
+        # Set webcam/USB cameras as online by default, others as offline
+        default_status = 'online' if camera_type in ['Webcam', 'USB'] else 'offline'
+        
         new_camera = Camera(
             name=data.get('name'),
             location=data.get('location'),
             rtsp_url=data.get('rtsp_url'),
-            camera_type=data.get('camera_type', 'IP'),
-            status='offline',
+            camera_type=camera_type,
+            status=data.get('status', default_status),
             is_active=True,
             is_ptz=data.get('is_ptz', False),
             fps=data.get('fps', 30),
@@ -470,13 +474,21 @@ def manage_camera(camera_id):
         })
     
     elif request.method == 'DELETE':
-        db.session.delete(camera)
-        db.session.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": "Camera deleted successfully"
-        })
+        try:
+            # Delete the camera
+            db.session.delete(camera)
+            db.session.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Camera deleted successfully"
+            })
+        except Exception as e:
+            db.session.rollback()
+            print(f"[ERROR] Failed to delete camera {camera_id}: {str(e)}")
+            return jsonify({
+                "error": f"Failed to delete camera: {str(e)}"
+            }), 500
 
 @app.route('/api/cameras/<int:camera_id>/test', methods=['POST'])
 def test_camera_connection(camera_id):
@@ -993,12 +1005,16 @@ def update_laptop_camera_status():
     try:
         data = request.get_json()
         status = data.get('status', 'online')
+        username = data.get('username', 'admin')  # Get username from request or default to admin
         
-        # Find laptop camera
-        laptop_camera = Camera.query.filter_by(name='Laptop Camera').first()
+        # Find webcam/laptop camera for this user (prioritize by camera type, then by name)
+        laptop_camera = Camera.query.filter_by(username=username).filter(
+            (Camera.camera_type.in_(['Webcam', 'USB'])) | 
+            (Camera.name.ilike('%laptop%'))
+        ).first()
         
         if not laptop_camera:
-            return jsonify({"error": "Laptop camera not found"}), 404
+            return jsonify({"error": "Webcam/Laptop camera not found"}), 404
         
         # Update status
         laptop_camera.status = status
@@ -1009,6 +1025,7 @@ def update_laptop_camera_status():
             "success": True,
             "message": f"Camera status updated to {status}",
             "cameraId": laptop_camera.id,
+            "cameraName": laptop_camera.name,
             "status": status
         })
         
@@ -1034,8 +1051,8 @@ def upload_recording():
         if video_file.filename == '':
             return jsonify({"error": "No selected file"}), 400
         
-        # Generate unique filename
-        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        # Generate unique filename using local time
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'recording_{timestamp}.webm'
         
         # Use user-specific recordings directory
@@ -1055,7 +1072,7 @@ def upload_recording():
             event_type='video_recorded',
             description=f'Video recording saved for user {username}: {filename} (Duration: {duration}s)',
             severity='info',
-            created_at=datetime.utcnow()
+            created_at=datetime.now()
         )
         db.session.add(log)
         db.session.commit()
@@ -1160,17 +1177,20 @@ def get_recordings():
                 # Extract timestamp from filename
                 timestamp_str = filename.replace('recording_', '').replace('.webm', '').replace('.mp4', '')
                 try:
+                    # Parse the timestamp from filename (local time)
                     file_time = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
                     formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
                 except:
-                    formatted_time = datetime.fromtimestamp(stats.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+                    # Fallback to file creation time
+                    file_time = datetime.fromtimestamp(stats.st_mtime)
+                    formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 recordings.append({
                     "filename": filename,
                     "size": stats.st_size,
                     "sizeMB": round(stats.st_size / (1024 * 1024), 2),
                     "created": formatted_time,
-                    "timestamp": stats.st_ctime
+                    "timestamp": stats.st_mtime
                 })
         
         # Sort by newest first

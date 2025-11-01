@@ -18,7 +18,7 @@ import {
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
-    cameras: { total: 6, online: 6, offline: 0 },
+    cameras: { total: 0, online: 0, offline: 0 },
     authorizedPersons: { total: 24, active: 22, inactive: 2 },
     intrudersDetected: { today: 3, thisWeek: 12, thisMonth: 45 },
     detectionsToday: { total: 156, persons: 89, objects: 52, animals: 15 }
@@ -64,7 +64,7 @@ const Dashboard = () => {
         setCameras(Array.isArray(data) ? data : []);
         
         // Update stats based on actual camera data
-        if (Array.isArray(data) && data.length > 0) {
+        if (Array.isArray(data)) {
           const onlineCameras = data.filter(cam => cam.status === 'online').length;
           const offlineCameras = data.length - onlineCameras;
           
@@ -201,7 +201,7 @@ const Dashboard = () => {
             </div>
             <div>
               <p className="text-sm opacity-90 mb-1">Active Cameras</p>
-              <p className="text-4xl font-bold mb-3">{stats.cameras.online}</p>
+              <p className="text-4xl font-bold mb-3">{stats.cameras.total}</p>
               <div className="flex items-center justify-between text-xs opacity-90">
                 <span className="flex items-center">
                   <CheckCircle className="w-4 h-4 mr-1" /> {stats.cameras.online} Online
@@ -336,34 +336,42 @@ const Dashboard = () => {
               </span>
             </div>
             <div className="space-y-3 overflow-y-auto scrollbar-thin flex-1 pr-2">
-              {cameras
-                .filter(cam => cam.status === 'online')
-                .map(cam => (
+              {cameras.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <Camera className="w-12 h-12 mb-2 opacity-50" />
+                  <p className="text-sm">No cameras added</p>
+                  <p className="text-xs mt-1">Add cameras to start monitoring</p>
+                </div>
+              ) : (
+                cameras.map(cam => (
                   <div key={cam.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
                     <div className="flex items-center space-x-3">
-                      <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
+                      <div className={`w-3 h-3 rounded-full ${
+                        cam.status === 'online' 
+                          ? 'bg-green-500 animate-pulse' 
+                          : 'bg-red-500'
+                      }`}></div>
                       <div>
                         <span className="text-sm font-medium text-gray-700 dark:text-gray-300 block">
                           {cam.name}
                         </span>
                         <span className="text-xs text-gray-500 dark:text-gray-400">
-                          {cam.location}
+                          {cam.location || 'No location'}
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-3 text-xs text-gray-500">
-                      <span>{cam.fps} FPS</span>
-                      <span className="bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 px-2 py-1 rounded">
-                        Active
+                    <div className="flex items-center space-x-3 text-xs">
+                      <span className="text-gray-500">{cam.fps} FPS</span>
+                      <span className={`px-2 py-1 rounded font-semibold ${
+                        cam.status === 'online'
+                          ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300'
+                          : 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
+                      }`}>
+                        {cam.status === 'online' ? 'Online' : 'Offline'}
                       </span>
                     </div>
                   </div>
-                ))}
-              {cameras.filter(cam => cam.status === 'online').length === 0 && (
-                <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                  <Camera className="w-12 h-12 mb-2 opacity-50" />
-                  <p className="text-sm">No cameras online</p>
-                </div>
+                ))
               )}
             </div>
           </div>

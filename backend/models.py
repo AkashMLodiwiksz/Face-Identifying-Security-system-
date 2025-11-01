@@ -76,7 +76,7 @@ class Camera(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships
-    detections = db.relationship('DetectionEvent', backref='camera', lazy=True)
+    detections = db.relationship('DetectionEvent', backref='camera', lazy=True, cascade='all, delete-orphan')
 
 
 class DetectionEvent(db.Model):
@@ -84,7 +84,7 @@ class DetectionEvent(db.Model):
     __tablename__ = 'detection_events'
     
     id = db.Column(db.Integer, primary_key=True)
-    camera_id = db.Column(db.Integer, db.ForeignKey('cameras.id'), nullable=False)
+    camera_id = db.Column(db.Integer, db.ForeignKey('cameras.id', ondelete='CASCADE'), nullable=False)
     person_id = db.Column(db.Integer, db.ForeignKey('authorized_persons.id'))  # Null if intruder
     detection_type = db.Column(db.String(20), nullable=False)  # face, person, object, animal
     is_authorized = db.Column(db.Boolean, default=False)
@@ -120,7 +120,7 @@ class IntruderAppearance(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     intruder_id = db.Column(db.Integer, db.ForeignKey('intruders.id'), nullable=False)
     detection_event_id = db.Column(db.Integer, db.ForeignKey('detection_events.id'))
-    camera_id = db.Column(db.Integer, db.ForeignKey('cameras.id'))
+    camera_id = db.Column(db.Integer, db.ForeignKey('cameras.id', ondelete='SET NULL'))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     image_path = db.Column(db.String(255))
     confidence = db.Column(db.Float)

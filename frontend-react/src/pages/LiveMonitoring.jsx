@@ -16,7 +16,8 @@ import {
   Monitor,
   Maximize2,
   Grid3x3,
-  Grid2x2
+  Grid2x2,
+  Camera
 } from 'lucide-react';
 import api from '../services/api';
 import backgroundRecordingService from '../services/backgroundRecording';
@@ -129,12 +130,26 @@ const LiveMonitoring = () => {
   // Handle start recording
   const handleStartRecording = async () => {
     try {
-      // Start camera first if not running
-      if (webcamRef.current && !webcamRef.current.isStreaming) {
-        await webcamRef.current.startCamera();
+      // Check if there are any webcam cameras
+      const webcamCameras = cameras.filter(cam => 
+        cam.camera_type === 'USB' || 
+        cam.camera_type === 'Webcam' || 
+        cam.name.toLowerCase().includes('laptop')
+      );
+      
+      if (webcamCameras.length === 0) {
+        console.warn('⚠️ No webcam cameras available to record');
+        return;
       }
       
-      await backgroundRecordingService.resumeRecording();
+      // Start or resume recording
+      const status = backgroundRecordingService.getStatus();
+      if (!status.isInitialized) {
+        await backgroundRecordingService.start();
+      } else {
+        await backgroundRecordingService.resumeRecording();
+      }
+      
       console.log('✅ Recording started from Live Monitoring');
     } catch (error) {
       console.error('❌ Failed to start recording:', error);
@@ -305,53 +320,42 @@ const LiveMonitoring = () => {
             </button>
           </div>
         ) : viewMode === 'grid' ? (
-          /* Grid View - All Cameras */
-          <div className="space-y-6">
+          /* Grid View - All Cameras - More Compact */
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {cameras.map((camera, index) => (
-              <div key={camera.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-lg overflow-hidden isolate" style={{position: 'relative', zIndex: 1}}>
-                <div className="p-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white">
+              <div key={camera.id} className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden isolate" style={{position: 'relative', zIndex: 1}}>
+                <div className="p-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
-                      <Monitor className="w-5 h-5" />
+                      <Monitor className="w-4 h-4" />
                       <div>
-                        <h3 className="font-semibold">{camera.name}</h3>
-                        <p className="text-xs opacity-90">{camera.location || 'No location set'}</p>
+                        <h3 className="font-semibold text-sm">{camera.name}</h3>
+                        <p className="text-xs opacity-80">{camera.location || 'No location'}</p>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       {camera.status === 'online' ? (
-                        <Wifi className="w-5 h-5" />
+                        <Wifi className="w-4 h-4" />
                       ) : (
-                        <WifiOff className="w-5 h-5 opacity-50" />
+                        <WifiOff className="w-4 h-4 opacity-50" />
                       )}
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        camera.status === 'online' ? 'bg-green-500' : 'bg-gray-500'
-                      }`}>
-                        {camera.status || 'offline'}
-                      </span>
                     </div>
                   </div>
                 </div>
                 
-                <div className="p-6">
-                  {camera.camera_type === 'USB' || camera.name.toLowerCase().includes('laptop') ? (
-                    /* Laptop/USB Camera - Show WebcamCapture */
-                    index === 0 ? (
-                      <div className="mb-4">
-                        <WebcamCapture 
-                          ref={webcamRef}
-                          onCapture={handleCapture} 
-                          onStreamingChange={handleStreamingChange}
-                        />
-                      </div>
-                    ) : (
-                      <div className="aspect-video bg-gray-900 rounded-lg flex items-center justify-center mb-4">
-                        <p className="text-gray-400 text-sm">Laptop camera shown in first position</p>
-                      </div>
-                    )
+                <div className="p-3">
+                  {camera.camera_type === 'USB' || camera.camera_type === 'Webcam' || camera.name.toLowerCase().includes('laptop') ? (
+                    /* Laptop/USB/Webcam Camera - Show WebcamCapture for ALL laptop cameras */
+                    <div className="mb-2">
+                      <WebcamCapture 
+                        ref={index === 0 ? webcamRef : null}
+                        onCapture={handleCapture} 
+                        onStreamingChange={handleStreamingChange}
+                      />
+                    </div>
                   ) : (
                     /* CCTV/IP Camera - Show RTSP Stream with Controls */
-                    <div className="mb-4">
+                    <div className="mb-2">
                       <RTSPCameraFeed 
                         camera={{...camera, ip: '192.168.137.189'}} 
                         onStreamChange={(isStreaming) => {
@@ -361,15 +365,21 @@ const LiveMonitoring = () => {
                     </div>
                   )}
                   
-                  <div className="mt-4 grid grid-cols-2 gap-4 text-sm text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900 p-4 rounded-lg">
+                  {/* Camera Info - More Compact */}
+                  <div className="grid grid-cols-3 gap-2 p-2 bg-gray-50 dark:bg-gray-900 rounded text-xs">
                     <div>
-                      <span className="font-semibold">Type:</span> {camera.camera_type}
+                      <p className="text-gray-500 dark:text-gray-400">Type</p>
+                      <p className="font-semibold text-gray-800 dark:text-white">{camera.camera_type}</p>
                     </div>
                     <div>
-                      <span className="font-semibold">FPS:</span> {camera.fps}
+                      <p className="text-gray-500 dark:text-gray-400">FPS</p>
+                      <p className="font-semibold text-gray-800 dark:text-white">{camera.fps}</p>
                     </div>
-                    <div className="col-span-2">
-                      <span className="font-semibold">Resolution:</span> {camera.resolution}
+                    <div>
+                      <p className="text-gray-500 dark:text-gray-400">PTZ</p>
+                      <p className="font-semibold text-gray-800 dark:text-white">
+                        {camera.is_ptz ? 'Yes' : 'No'}
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -428,8 +438,8 @@ const LiveMonitoring = () => {
                 </div>
                 
                 <div className="p-6">
-                  {selectedCamera.camera_type === 'USB' || selectedCamera.name.toLowerCase().includes('laptop') ? (
-                    /* Laptop/USB Camera */
+                  {selectedCamera.camera_type === 'USB' || selectedCamera.camera_type === 'Webcam' || selectedCamera.name.toLowerCase().includes('laptop') ? (
+                    /* Laptop/USB/Webcam Camera */
                     <WebcamCapture 
                       ref={webcamRef}
                       onCapture={handleCapture} 
@@ -476,13 +486,35 @@ const LiveMonitoring = () => {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
             <div className="flex items-center justify-between">
               <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Active Cameras</p>
+                <p className="text-2xl font-bold text-gray-800 dark:text-white mt-1">
+                  {cameras.filter(cam => cam.status === 'online').length} / {cameras.length}
+                </p>
+                <div className="flex items-center space-x-3 mt-2 text-xs">
+                  <span className="text-green-600 dark:text-green-400">
+                    ● {cameras.filter(cam => cam.status === 'online').length} Online
+                  </span>
+                  <span className="text-red-600 dark:text-red-400">
+                    ● {cameras.filter(cam => cam.status === 'offline').length} Offline
+                  </span>
+                </div>
+              </div>
+              <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
+                <Camera className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
+            <div className="flex items-center justify-between">
+              <div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Total Detections</p>
                 <p className="text-2xl font-bold text-gray-800 dark:text-white mt-1">
                   {detections.length}
                 </p>
               </div>
-              <div className="p-3 bg-blue-100 dark:bg-blue-900 rounded-lg">
-                <Video className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+              <div className="p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
+                <Video className="w-6 h-6 text-purple-600 dark:text-purple-400" />
               </div>
             </div>
           </div>
@@ -500,29 +532,43 @@ const LiveMonitoring = () => {
               </div>
             </div>
           </div>
+        </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 relative" style={{zIndex: 10}}>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-gray-600 dark:text-gray-400">System Status</p>
-                <p className="text-2xl font-bold text-gray-800 dark:text-white mt-1">
-                  {isCameraStreaming && isDetectionEnabled ? 'ACTIVE' : 'STOPPED'}
-                </p>
-              </div>
-              <div className={`p-3 rounded-lg ${
-                isCameraStreaming && isDetectionEnabled
-                  ? 'bg-green-100 dark:bg-green-900' 
-                  : 'bg-red-100 dark:bg-red-900'
-              }`}>
-                {isCameraStreaming && isDetectionEnabled ? (
-                  <Video className="w-6 h-6 text-green-600 dark:text-green-400" />
-                ) : (
-                  <VideoOff className="w-6 h-6 text-red-600 dark:text-red-400" />
-                )}
-              </div>
+        {/* Camera Status List */}
+        {cameras.length > 0 && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 mb-6">
+            <h2 className="text-lg font-bold text-gray-800 dark:text-white mb-4 flex items-center">
+              <Camera className="w-5 h-5 mr-2" />
+              Camera Status
+            </h2>
+            <div className="space-y-2">
+              {cameras.map((camera) => (
+                <div 
+                  key={camera.id}
+                  className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
+                >
+                  <div className="flex items-center space-x-3">
+                    <div className={`w-3 h-3 rounded-full ${camera.status === 'online' ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+                    <div>
+                      <p className="font-semibold text-gray-800 dark:text-white">{camera.name}</p>
+                      <p className="text-xs text-gray-600 dark:text-gray-400">{camera.location || 'No location'}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-4">
+                    <span className={`text-xs px-3 py-1 rounded-full font-semibold ${
+                      camera.status === 'online' 
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' 
+                        : 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                    }`}>
+                      {camera.status.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-gray-600 dark:text-gray-400">{camera.camera_type}</span>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        )}
 
         {/* Saved Captures Gallery */}
         {savedCaptures.length > 0 && (
