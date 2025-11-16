@@ -8,6 +8,9 @@ import Toast from '../components/Toast';
 
 const Recordings = () => {
   const [recordings, setRecordings] = useState([]);
+  const [recordingsByCamera, setRecordingsByCamera] = useState({});
+  const [cameras, setCameras] = useState([]);
+  const [selectedCamera, setSelectedCamera] = useState('all'); // 'all' or camera_id
   const [totalSize, setTotalSize] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedVideo, setSelectedVideo] = useState(null);
@@ -18,7 +21,7 @@ const Recordings = () => {
   const videoRef = useRef(null);
 
   // Modal states
-  const [deleteModal, setDeleteModal] = useState({ isOpen: false, filename: null });
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, filename: null, cameraId: null });
   const [formatModal, setFormatModal] = useState({ isOpen: false, step: 1 });
   const [toast, setToast] = useState({ isOpen: false, type: 'success', title: '', message: '' });
 
@@ -38,6 +41,8 @@ const Recordings = () => {
       
       const response = await api.get(`/recordings?username=${username}`);
       setRecordings(response.data.recordings);
+      setRecordingsByCamera(response.data.recordingsByCamera || {});
+      setCameras(response.data.cameras || []);
       setTotalSize(response.data.totalSizeMB);
     } catch (error) {
       console.error('Error fetching recordings:', error);
@@ -46,9 +51,9 @@ const Recordings = () => {
     }
   };
 
-  const deleteRecording = async (filename) => {
+  const deleteRecording = async (filename, cameraId) => {
     try {
-      console.log('Deleting recording:', filename);
+      console.log('Deleting recording:', filename, 'from camera:', cameraId);
       
       const username = localStorage.getItem('username');
       
@@ -58,12 +63,12 @@ const Recordings = () => {
       }
       
       const response = await api.delete(`/recordings/${filename}`, {
-        data: { username }
+        data: { username, camera_id: cameraId }
       });
       console.log('Delete response:', response.data);
       
       // Close modal
-      setDeleteModal({ isOpen: false, filename: null });
+      setDeleteModal({ isOpen: false, filename: null, cameraId: null });
       
       // Show success toast
       setToast({
@@ -80,7 +85,7 @@ const Recordings = () => {
       console.error('Error deleting recording:', error);
       
       // Close modal
-      setDeleteModal({ isOpen: false, filename: null });
+      setDeleteModal({ isOpen: false, filename: null, cameraId: null });
       
       // Show error toast
       if (error.response && error.response.status === 403) {
@@ -451,7 +456,7 @@ const Recordings = () => {
               <video
                 ref={videoRef}
                 className="w-full"
-                src={`http://localhost:5000/api/recordings/${selectedVideo[currentSegmentIndex].filename}?username=${localStorage.getItem('username')}`}
+                src={`http://localhost:5000/api/recordings/${selectedVideo[currentSegmentIndex].filename}?username=${localStorage.getItem('username')}&camera_id=${selectedVideo[currentSegmentIndex].camera_id}`}
                 onEnded={handleVideoEnded}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
@@ -589,17 +594,51 @@ const Recordings = () => {
           </div>
         )}
 
+        {/* Camera Filter Tabs */}
+        {cameras.length > 0 && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-6">
+            <div className="flex items-center space-x-2 overflow-x-auto">
+              <button
+                onClick={() => setSelectedCamera('all')}
+                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                  selectedCamera === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                }`}
+              >
+                All Cameras ({recordings.length})
+              </button>
+              {cameras.map((camera) => (
+                <button
+                  key={camera.id}
+                  onClick={() => setSelectedCamera(camera.id)}
+                  className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
+                    selectedCamera === camera.id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  {camera.name} ({recordingsByCamera[camera.id]?.count || 0})
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Recordings List */}
         {loading ? (
           <div className="text-center py-12">
             <div className="animate-spin w-12 h-12 border-4 border-primary border-t-transparent rounded-full mx-auto"></div>
             <p className="text-gray-600 dark:text-gray-400 mt-4">Loading recordings...</p>
           </div>
-        ) : recordings.length > 0 ? (
+        ) : (selectedCamera === 'all' ? recordings : (recordingsByCamera[selectedCamera]?.recordings || [])).length > 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
             <table className="w-full">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                    Camera
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Filename
                   </th>
@@ -615,12 +654,20 @@ const Recordings = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                {recordings.map((recording) => (
-                  <tr key={recording.filename} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                {(selectedCamera === 'all' ? recordings : (recordingsByCamera[selectedCamera]?.recordings || [])).map((recording) => (
+                  <tr key={`${recording.camera_id}-${recording.filename}`} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div className={`w-2 h-2 rounded-full mr-2 ${recording.camera_id ? 'bg-green-500' : 'bg-gray-400'}`}></div>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white">
+                          {recording.camera_name || 'Unknown'}
+                        </span>
+                      </div>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
                         <Video className="w-5 h-5 text-gray-400 mr-3" />
-                        <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        <span className="text-sm text-gray-900 dark:text-white">
                           {recording.filename}
                         </span>
                       </div>
@@ -640,7 +687,7 @@ const Recordings = () => {
                         <Play className="w-5 h-5 inline" />
                       </button>
                       <a
-                        href={`http://localhost:5000/api/recordings/${recording.filename}?username=${localStorage.getItem('username')}`}
+                        href={`http://localhost:5000/api/recordings/${recording.filename}?username=${localStorage.getItem('username')}&camera_id=${recording.camera_id}`}
                         download
                         className="text-green-600 hover:text-green-900 dark:text-green-400 dark:hover:text-green-300 mr-4"
                         title="Download Video"
@@ -648,7 +695,7 @@ const Recordings = () => {
                         <Download className="w-5 h-5 inline" />
                       </a>
                       <button
-                        onClick={() => setDeleteModal({ isOpen: true, filename: recording.filename })}
+                        onClick={() => setDeleteModal({ isOpen: true, filename: recording.filename, cameraId: recording.camera_id })}
                         className="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300"
                         title="Delete Video"
                       >
@@ -676,8 +723,8 @@ const Recordings = () => {
       {/* Delete Confirmation Modal */}
       <ConfirmModal
         isOpen={deleteModal.isOpen}
-        onClose={() => setDeleteModal({ isOpen: false, filename: null })}
-        onConfirm={() => deleteRecording(deleteModal.filename)}
+        onClose={() => setDeleteModal({ isOpen: false, filename: null, cameraId: null })}
+        onConfirm={() => deleteRecording(deleteModal.filename, deleteModal.cameraId)}
         title="Delete Recording"
         message={`Are you sure you want to delete this recording?\n\n"${deleteModal.filename}"\n\nThis action cannot be undone.`}
         confirmText="Delete"

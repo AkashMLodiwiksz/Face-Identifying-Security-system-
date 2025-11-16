@@ -33,6 +33,7 @@ const LiveMonitoring = () => {
   const [cameras, setCameras] = useState([]);
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'single'
   const [selectedCamera, setSelectedCamera] = useState(null);
+  const [cameraRecordingStatus, setCameraRecordingStatus] = useState({}); // {camera_id: boolean}
   
   const [recordingStatus, setRecordingStatus] = useState({
     isRecording: false,
@@ -41,9 +42,19 @@ const LiveMonitoring = () => {
 
   // Create ref for WebcamCapture component
   const webcamRef = useRef(null);
+  
+  // Ref to track auto-restart timers
+  const recordingTimers = useRef({});
 
   // Get username
   const username = localStorage.getItem('username') || sessionStorage.getItem('username');
+  
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      Object.values(recordingTimers.current).forEach(timer => clearTimeout(timer));
+    };
+  }, []);
 
   // Fetch all cameras on mount
   useEffect(() => {
@@ -85,18 +96,52 @@ const LiveMonitoring = () => {
     return () => clearInterval(interval);
   }, [username]);
 
-  // Check background recording status
+  // Auto-start server-side recording on mount
+  useEffect(() => {
+    const initRecording = async () => {
+      try {
+        // Wait for cameras to load first
+        if (cameras.length === 0) {
+          console.log('⏳ Waiting for cameras to load...');
+          return;
+        }
+        
+        console.log('🎬 Auto-starting server-side recording...');
+        await handleStartRecording();
+        console.log('✅ Auto-started server-side recording');
+      } catch (error) {
+        console.error('❌ Failed to auto-start recording:', error);
+      }
+    };
+    
+    // Only auto-start if cameras are loaded and not already recording
+    if (cameras.length > 0 && !recordingStatus.isRecording) {
+      initRecording();
+    }
+  }, [cameras]);
+
+  // Update recording time counter for active recordings
   useEffect(() => {
     const interval = setInterval(() => {
-      const status = backgroundRecordingService.getStatus();
-      setRecordingStatus({
-        isRecording: status.isRecording,
-        recordingTime: status.recordingTime
-      });
+      // Check if any cameras are recording
+      const hasActiveRecording = Object.values(cameraRecordingStatus).some(status => status === true);
+      
+      if (hasActiveRecording) {
+        setRecordingStatus(prev => ({
+          isRecording: true,
+          recordingTime: prev.recordingTime + 1
+        }));
+      } else {
+        // No active recordings
+        setRecordingStatus({
+          isRecording: false,
+          recordingTime: 0
+        });
+      }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [cameraRecordingStatus]);
 
   // Handle visibility change - prevent auto-start if manually stopped
   useEffect(() => {
@@ -127,43 +172,133 @@ const LiveMonitoring = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Handle start recording
+  // Handle start recording - Start recording for ALL cameras
   const handleStartRecording = async () => {
     try {
-      // Check if there are any webcam cameras
-      const webcamCameras = cameras.filter(cam => 
-        cam.camera_type === 'USB' || 
-        cam.camera_type === 'Webcam' || 
-        cam.name.toLowerCase().includes('laptop')
-      );
+      console.log('🎬 handleStartRecording called');
+      console.log('📍 Total cameras:', cameras.length);
+      console.log('📍 All cameras:', cameras);
       
-      if (webcamCameras.length === 0) {
-        console.warn('⚠️ No webcam cameras available to record');
+      if (cameras.length === 0) {
+        console.warn('⚠️ No cameras available to record');
         return;
       }
       
-      // Start or resume recording
-      const status = backgroundRecordingService.getStatus();
-      if (!status.isInitialized) {
-        await backgroundRecordingService.start();
-      } else {
-        await backgroundRecordingService.resumeRecording();
+      console.log(`🎬 Starting server-side FFmpeg recording for ${cameras.length} camera(s)...`);
+      
+      // Start server-side FFmpeg recording for each camera
+      // Webcams: Master-slave system (device_index 0)
+      // IP Cameras: Record independently from RTSP stream
+      for (let i = 0; i < cameras.length; i++) {
+        const camera = cameras[i];
+        const deviceIndex = (camera.camera_type === 'USB' || camera.camera_type === 'Webcam') ? 0 : i;
+        console.log(`📍 Starting server-side recording for camera ${camera.id} (${camera.name}, type: ${camera.camera_type})...`);
+        await startCameraRecording(camera, deviceIndex);
       }
       
-      console.log('✅ Recording started from Live Monitoring');
+      console.log('✅ Recording started for all cameras');
     } catch (error) {
       console.error('❌ Failed to start recording:', error);
+      console.error('❌ Error details:', error.message, error.stack);
     }
   };
 
-  // Handle stop recording
+  // Handle stop recording - Stop recording for ALL cameras
   const handleStopRecording = async () => {
     try {
-      // Only stop recording - don't stop camera feed
-      await backgroundRecordingService.pauseRecording();
-      console.log('✅ Recording stopped from Live Monitoring');
+      console.log('⏹️ Stopping all server-side camera recordings...');
+      
+      console.log(`📍 Stopping ${cameras.length} cameras...`);
+      
+      // Stop all server-side FFmpeg recordings (both webcam and IP cameras)
+      for (const camera of cameras) {
+        console.log(`📍 Stopping camera ${camera.id} (${camera.name}, type: ${camera.camera_type})...`);
+        await stopCameraRecording(camera);
+      }
+      
+      // Update recording status to stopped
+      setRecordingStatus({
+        isRecording: false,
+        recordingTime: 0
+      });
+      
+      console.log('✅ Recording stopped for all cameras');
     } catch (error) {
       console.error('❌ Failed to stop recording:', error);
+      console.error('❌ Error details:', error.message, error.stack);
+    }
+  };
+
+  // Start server-side recording for specific camera
+  const startCameraRecording = async (camera, deviceIndex = 0) => {
+    try {
+      const response = await api.post(`/cameras/${camera.id}/recording/start`, {
+        username,
+        device_index: deviceIndex,
+        duration: 60 // 60 seconds per segment
+      });
+      
+      if (response.data.success) {
+        setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: true }));
+        
+        // Update main recording status
+        setRecordingStatus({
+          isRecording: true,
+          recordingTime: 0
+        });
+        
+        console.log(`✅ Started recording for camera: ${camera.name} (device index: ${deviceIndex})`);
+        
+        // Auto-restart recording after duration
+        const timer = setTimeout(() => {
+          // Check if still recording before restarting
+          setCameraRecordingStatus(prev => {
+            if (prev[camera.id]) {
+              startCameraRecording(camera, deviceIndex);
+            }
+            return prev;
+          });
+        }, 60000);
+        
+        recordingTimers.current[camera.id] = timer;
+      }
+    } catch (error) {
+      console.error(`❌ Failed to start recording for camera ${camera.name}:`, error);
+    }
+  };
+
+  // Stop server-side recording for specific camera
+  const stopCameraRecording = async (camera) => {
+    try {
+      console.log(`📍 stopCameraRecording called for camera ${camera.id}`);
+      
+      // Clear auto-restart timer
+      if (recordingTimers.current[camera.id]) {
+        clearTimeout(recordingTimers.current[camera.id]);
+        delete recordingTimers.current[camera.id];
+        console.log(`✅ Cleared timer for camera ${camera.id}`);
+      }
+      
+      // Update status immediately
+      setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: false }));
+      
+      await api.post(`/cameras/${camera.id}/recording/stop`, {
+        username
+      });
+      
+      setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: false }));
+      console.log(`✅ Stopped recording for camera: ${camera.name}`);
+    } catch (error) {
+      console.error(`❌ Failed to stop recording for camera ${camera.name}:`, error);
+    }
+  };
+
+  // Toggle recording for specific camera
+  const toggleCameraRecording = async (camera) => {
+    if (cameraRecordingStatus[camera.id]) {
+      await stopCameraRecording(camera);
+    } else {
+      await startCameraRecording(camera);
     }
   };
 

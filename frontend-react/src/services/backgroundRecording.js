@@ -13,13 +13,14 @@ class BackgroundRecordingService {
     this.recordingInterval = null;
     this.isRecording = false;
     this.isInitialized = false;
+    this.cameraId = null; // Store camera ID for uploads
   }
 
   /**
    * Initialize and start background recording
    */
-  async start() {
-    console.log('📍 BackgroundRecordingService.start() called');
+  async start(specificCameraId = null) {
+    console.log('📍 BackgroundRecordingService.start() called', specificCameraId ? `with camera ID: ${specificCameraId}` : '');
     console.log('📍 Current state - isInitialized:', this.isInitialized);
     
     if (this.isInitialized) {
@@ -52,7 +53,14 @@ class BackgroundRecordingService {
           return;
         }
         
-        console.log(`✅ Found ${webcamCameras.length} webcam camera(s), starting recording...`);
+        // Use specific camera ID if provided, otherwise use first webcam
+        if (specificCameraId) {
+          const camera = webcamCameras.find(c => c.id === specificCameraId);
+          this.cameraId = camera ? camera.id : webcamCameras[0].id;
+        } else {
+          this.cameraId = webcamCameras[0].id;
+        }
+        console.log(`✅ Found ${webcamCameras.length} webcam camera(s), using camera ID: ${this.cameraId}`);
       }
       
       console.log('📍 Requesting camera access...');
@@ -69,9 +77,6 @@ class BackgroundRecordingService {
 
       console.log('✅ Camera access granted for background recording');
       console.log('📍 Camera stream:', this.stream);
-      
-      // Register laptop camera with backend
-      await this.registerCamera();
       
       // Update camera status to online
       await this.updateCameraStatus('online');
@@ -99,30 +104,7 @@ class BackgroundRecordingService {
     }
   }
 
-  /**
-   * Register laptop camera with backend
-   */
-  async registerCamera() {
-    try {
-      const response = await fetch('http://localhost:5000/api/cameras/laptop', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: 'Laptop Camera (Background)',
-          location: 'System Background Service',
-          status: 'online'
-        })
-      });
 
-      if (response.ok) {
-        console.log('✅ Camera registered with backend');
-      }
-    } catch (error) {
-      console.error('⚠️ Failed to register camera:', error);
-    }
-  }
 
   /**
    * Start recording
@@ -226,6 +208,12 @@ class BackgroundRecordingService {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       formData.append('video', blob, `background_recording_${timestamp}.webm`);
       formData.append('username', username);  // Add username to form data
+      
+      // Add camera_id if available
+      if (this.cameraId) {
+        formData.append('camera_id', this.cameraId);
+        console.log(`📤 Uploading recording for camera ID: ${this.cameraId}`);
+      }
 
       const response = await fetch('http://localhost:5000/api/recordings/upload', {
         method: 'POST',

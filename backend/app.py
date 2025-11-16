@@ -8,19 +8,29 @@ import base64
 import subprocess
 import requests
 from io import BytesIO
+from recording_manager import recording_manager
 
 # Load environment variables
 load_dotenv()
 
 # Helper function to get recordings directory
-def get_recordings_dir(username=None):
+def get_recordings_dir(username=None, camera_id=None, camera_name=None):
     """Get the recordings directory path using the current user's Videos folder"""
     user_profile = os.environ.get('USERPROFILE')  # e.g., C:\Users\YourActualUsername
     base_recordings_dir = os.path.join(user_profile, 'Videos', 'recordings')
     
     # If username is provided, return user-specific directory
     if username:
-        return os.path.join(base_recordings_dir, username)
+        user_dir = os.path.join(base_recordings_dir, username)
+        
+        # If camera info is provided, return camera-specific directory
+        if camera_id and camera_name:
+            # Sanitize camera name for folder name
+            safe_camera_name = "".join(c for c in camera_name if c.isalnum() or c in (' ', '-', '_')).strip()
+            camera_folder = f"camera_{camera_id}_{safe_camera_name}"
+            return os.path.join(user_dir, camera_folder)
+        
+        return user_dir
     
     return base_recordings_dir
 
@@ -108,6 +118,21 @@ with app.app_context():
         print(f"[SUCCESS] Recordings directory created at: {recordings_dir}")
     else:
         print(f"[INFO] Using recordings directory: {recordings_dir}")
+    
+    # Create camera-specific folders for all existing cameras
+    print("[INFO] Creating camera-specific recording folders...")
+    all_users = User.query.all()
+    for user in all_users:
+        user_cameras = Camera.query.filter_by(username=user.username).all()
+        for camera in user_cameras:
+            try:
+                camera_dir = get_recordings_dir(user.username, camera.id, camera.name)
+                if not os.path.exists(camera_dir):
+                    os.makedirs(camera_dir)
+                    print(f"[SUCCESS] Created folder for camera '{camera.name}' (ID: {camera.id})")
+            except Exception as e:
+                print(f"[WARNING] Could not create folder for camera '{camera.name}': {e}")
+    print("[SUCCESS] Camera folders initialization complete")
 
 # Sample data (will be replaced with database)
 cameras_data = [
@@ -397,6 +422,15 @@ def manage_cameras():
         
         db.session.add(new_camera)
         db.session.commit()
+        
+        # Create recording folder for this camera
+        try:
+            camera_recordings_dir = get_recordings_dir(username, new_camera.id, new_camera.name)
+            if not os.path.exists(camera_recordings_dir):
+                os.makedirs(camera_recordings_dir)
+                print(f"[SUCCESS] Created recordings folder for camera '{new_camera.name}': {camera_recordings_dir}")
+        except Exception as e:
+            print(f"[WARNING] Could not create recordings folder for camera: {e}")
         
         return jsonify({
             "success": True,
@@ -963,16 +997,30 @@ def serve_capture(filename):
 @app.route('/api/cameras/laptop', methods=['POST'])
 def register_laptop_camera():
     try:
-        # Check if laptop camera already exists
-        laptop_camera = Camera.query.filter_by(name='Laptop Camera').first()
+        data = request.get_json()
+        username = data.get('username') if data else None
+        
+        # Get username from localStorage if not provided
+        if not username:
+            username = request.headers.get('X-Username', 'admin')
+        
+        camera_name = data.get('name', 'Laptop Camera') if data else 'Laptop Camera'
+        
+        # Check if this user already has a laptop camera
+        laptop_camera = Camera.query.filter_by(
+            username=username,
+            name=camera_name
+        ).first()
         
         if not laptop_camera:
             laptop_camera = Camera(
-                name='Laptop Camera',
-                location='Live Monitoring',
+                name=camera_name,
+                location=data.get('location', 'Live Monitoring') if data else 'Live Monitoring',
                 rtsp_url='webcam://0',
+                camera_type='Webcam',
                 status='online',
-                is_active=True
+                is_active=True,
+                username=username
             )
             db.session.add(laptop_camera)
             db.session.commit()
@@ -1044,6 +1092,7 @@ def upload_recording():
         video_file = request.files['video']
         duration = request.form.get('duration', 0)
         username = request.form.get('username')  # Get username from request
+        camera_id = request.form.get('camera_id')  # Get camera ID
         
         if not username:
             return jsonify({"error": "Username is required"}), 400
@@ -1051,14 +1100,21 @@ def upload_recording():
         if video_file.filename == '':
             return jsonify({"error": "No selected file"}), 400
         
+        # Get camera name if camera_id is provided
+        camera_name = "Default"
+        if camera_id:
+            camera = Camera.query.filter_by(id=camera_id, username=username).first()
+            if camera:
+                camera_name = camera.name
+        
         # Generate unique filename using local time
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'recording_{timestamp}.webm'
         
-        # Use user-specific recordings directory
-        recordings_dir = get_recordings_dir(username)
+        # Use camera-specific recordings directory
+        recordings_dir = get_recordings_dir(username, camera_id, camera_name)
         
-        # Create user directory if it doesn't exist
+        # Create camera directory if it doesn't exist
         if not os.path.exists(recordings_dir):
             os.makedirs(recordings_dir)
         
@@ -1161,45 +1217,78 @@ def get_recordings():
         if not username:
             return jsonify({"error": "Username is required"}), 400
         
+        # Get user's cameras
+        cameras = Camera.query.filter_by(username=username).all()
+        
         # Use user-specific recordings directory
-        recordings_dir = get_recordings_dir(username)
+        user_recordings_dir = get_recordings_dir(username)
         
-        if not os.path.exists(recordings_dir):
-            os.makedirs(recordings_dir)
-            return jsonify({"recordings": [], "total": 0, "totalSizeMB": 0})
+        if not os.path.exists(user_recordings_dir):
+            os.makedirs(user_recordings_dir)
+            return jsonify({"recordings": [], "cameras": [], "total": 0, "totalSizeMB": 0})
         
-        recordings = []
-        for filename in os.listdir(recordings_dir):
-            if filename.endswith('.webm') or filename.endswith('.mp4'):
-                filepath = os.path.join(recordings_dir, filename)
-                stats = os.stat(filepath)
-                
-                # Extract timestamp from filename
-                timestamp_str = filename.replace('recording_', '').replace('.webm', '').replace('.mp4', '')
-                try:
-                    # Parse the timestamp from filename (local time)
-                    file_time = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
-                    formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
-                except:
-                    # Fallback to file creation time
-                    file_time = datetime.fromtimestamp(stats.st_mtime)
-                    formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
-                
-                recordings.append({
-                    "filename": filename,
-                    "size": stats.st_size,
-                    "sizeMB": round(stats.st_size / (1024 * 1024), 2),
-                    "created": formatted_time,
-                    "timestamp": stats.st_mtime
-                })
+        recordings_by_camera = {}
+        all_recordings = []
         
-        # Sort by newest first
-        recordings.sort(key=lambda x: x['timestamp'], reverse=True)
+        # Scan each camera's folder
+        for camera in cameras:
+            camera_dir = get_recordings_dir(username, camera.id, camera.name)
+            camera_recordings = []
+            
+            if os.path.exists(camera_dir):
+                for filename in os.listdir(camera_dir):
+                    if filename.endswith('.webm') or filename.endswith('.mp4'):
+                        filepath = os.path.join(camera_dir, filename)
+                        stats = os.stat(filepath)
+                        
+                        # Extract timestamp from filename
+                        timestamp_str = filename.replace('recording_', '').replace('.webm', '').replace('.mp4', '')
+                        try:
+                            # Parse the timestamp from filename (local time)
+                            file_time = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
+                            formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
+                        except:
+                            # Fallback to file creation time
+                            file_time = datetime.fromtimestamp(stats.st_mtime)
+                            formatted_time = file_time.strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        recording_data = {
+                            "filename": filename,
+                            "camera_id": camera.id,
+                            "camera_name": camera.name,
+                            "size": stats.st_size,
+                            "sizeMB": round(stats.st_size / (1024 * 1024), 2),
+                            "created": formatted_time,
+                            "timestamp": stats.st_mtime
+                        }
+                        camera_recordings.append(recording_data)
+                        all_recordings.append(recording_data)
+            
+            # Sort camera recordings by newest first
+            camera_recordings.sort(key=lambda x: x['timestamp'], reverse=True)
+            
+            recordings_by_camera[camera.id] = {
+                "camera_id": camera.id,
+                "camera_name": camera.name,
+                "camera_type": camera.camera_type,
+                "recordings": camera_recordings,
+                "count": len(camera_recordings),
+                "totalSizeMB": round(sum(r['size'] for r in camera_recordings) / (1024 * 1024), 2)
+            }
+        
+        # Sort all recordings by newest first
+        all_recordings.sort(key=lambda x: x['timestamp'], reverse=True)
         
         return jsonify({
-            "recordings": recordings,
-            "total": len(recordings),
-            "totalSizeMB": round(sum(r['size'] for r in recordings) / (1024 * 1024), 2)
+            "recordings": all_recordings,
+            "recordingsByCamera": recordings_by_camera,
+            "cameras": [{
+                "id": c.id,
+                "name": c.name,
+                "type": c.camera_type
+            } for c in cameras],
+            "total": len(all_recordings),
+            "totalSizeMB": round(sum(r['size'] for r in all_recordings) / (1024 * 1024), 2)
         })
         
     except Exception as e:
@@ -1217,9 +1306,9 @@ def format_recordings():
             return jsonify({"error": "Username is required"}), 400
         
         print(f"[FORMAT] Formatting all recordings for user: {username}...")
-        recordings_dir = get_recordings_dir(username)
+        user_dir = get_recordings_dir(username)
         
-        if not os.path.exists(recordings_dir):
+        if not os.path.exists(user_dir):
             print("[WARNING] No recordings directory found")
             return jsonify({"success": True, "message": "No recordings to delete", "deleted": 0, "failed": 0})
         
@@ -1227,23 +1316,29 @@ def format_recordings():
         failed_count = 0
         errors = []
         
-        for filename in os.listdir(recordings_dir):
-            if filename.endswith('.webm') or filename.endswith('.mp4'):
-                filepath = os.path.join(recordings_dir, filename)
-                try:
-                    os.remove(filepath)
-                    deleted_count += 1
-                    print(f"[SUCCESS] Deleted: {filename}")
-                except PermissionError as pe:
-                    failed_count += 1
-                    error_msg = f"Permission denied: {filename}"
-                    errors.append(error_msg)
-                    print(f"[ERROR] {error_msg}")
-                except Exception as e:
-                    failed_count += 1
-                    error_msg = f"Error deleting {filename}: {str(e)}"
-                    errors.append(error_msg)
-                    print(f"[ERROR] {error_msg}")
+        # Delete from all camera folders
+        cameras = Camera.query.filter_by(username=username).all()
+        for camera in cameras:
+            camera_dir = get_recordings_dir(username, camera.id, camera.name)
+            
+            if os.path.exists(camera_dir):
+                for filename in os.listdir(camera_dir):
+                    if filename.endswith('.webm') or filename.endswith('.mp4'):
+                        filepath = os.path.join(camera_dir, filename)
+                        try:
+                            os.remove(filepath)
+                            deleted_count += 1
+                            print(f"[SUCCESS] Deleted: {filename} from {camera.name}")
+                        except PermissionError as pe:
+                            failed_count += 1
+                            error_msg = f"Permission denied: {filename}"
+                            errors.append(error_msg)
+                            print(f"[ERROR] {error_msg}")
+                        except Exception as e:
+                            failed_count += 1
+                            error_msg = f"Error deleting {filename}: {str(e)}"
+                            errors.append(error_msg)
+                            print(f"[ERROR] {error_msg}")
         
         message = f"Deleted {deleted_count} recording(s)"
         if failed_count > 0:
@@ -1267,20 +1362,33 @@ def format_recordings():
 @app.route('/api/recordings/<filename>', methods=['GET'])
 def serve_recording(filename):
     try:
-        # Get username from query parameter
+        # Get username and camera_id from query parameters
         username = request.args.get('username')
+        camera_id = request.args.get('camera_id')
         
         if not username:
             return jsonify({"error": "Username is required"}), 400
         
-        # Use user-specific recordings directory
-        recordings_dir = get_recordings_dir(username)
-        filepath = os.path.join(recordings_dir, filename)
+        # If camera_id is provided, look in camera-specific folder
+        if camera_id:
+            camera = Camera.query.filter_by(id=camera_id, username=username).first()
+            if camera:
+                recordings_dir = get_recordings_dir(username, camera.id, camera.name)
+                filepath = os.path.join(recordings_dir, filename)
+                
+                if os.path.exists(filepath):
+                    return send_file(filepath, mimetype='video/webm')
         
-        if os.path.exists(filepath):
-            return send_file(filepath, mimetype='video/webm')
-        else:
-            return jsonify({"error": "Video not found"}), 404
+        # Fallback: search all camera folders
+        cameras = Camera.query.filter_by(username=username).all()
+        for camera in cameras:
+            recordings_dir = get_recordings_dir(username, camera.id, camera.name)
+            filepath = os.path.join(recordings_dir, filename)
+            
+            if os.path.exists(filepath):
+                return send_file(filepath, mimetype='video/webm')
+        
+        return jsonify({"error": "Video not found"}), 404
             
     except Exception as e:
         print(f"Error serving recording: {e}")
@@ -1292,32 +1400,52 @@ def delete_recording(filename):
     try:
         data = request.get_json()
         username = data.get('username')
+        camera_id = data.get('camera_id')
         
         if not username:
             return jsonify({"error": "Username is required"}), 400
         
         print(f"Attempting to delete recording: {filename} for user: {username}")
-        recordings_dir = get_recordings_dir(username)
-        filepath = os.path.join(recordings_dir, filename)
         
-        print(f"Recordings directory: {recordings_dir}")
-        print(f"Full filepath: {filepath}")
-        print(f"File exists: {os.path.exists(filepath)}")
+        # If camera_id is provided, look in camera-specific folder
+        if camera_id:
+            camera = Camera.query.filter_by(id=camera_id, username=username).first()
+            if camera:
+                recordings_dir = get_recordings_dir(username, camera.id, camera.name)
+                filepath = os.path.join(recordings_dir, filename)
+                
+                if os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                        print(f"Successfully deleted: {filename}")
+                        return jsonify({"success": True, "message": "Recording deleted successfully"})
+                    except PermissionError as pe:
+                        print(f"Permission error: {pe}")
+                        return jsonify({"error": "File is in use or permission denied"}), 403
+                    except Exception as e:
+                        print(f"Error deleting file: {e}")
+                        return jsonify({"error": str(e)}), 500
         
-        if os.path.exists(filepath):
-            try:
-                os.remove(filepath)
-                print(f"Successfully deleted: {filename}")
-                return jsonify({"success": True, "message": "Recording deleted successfully"})
-            except PermissionError as pe:
-                print(f"Permission error: {pe}")
-                return jsonify({"error": "File is in use or permission denied"}), 403
-            except Exception as e:
-                print(f"Error deleting file: {e}")
-                return jsonify({"error": str(e)}), 500
-        else:
-            print(f"Video not found: {filename}")
-            return jsonify({"error": "Video not found"}), 404
+        # Fallback: search all camera folders
+        cameras = Camera.query.filter_by(username=username).all()
+        for camera in cameras:
+            recordings_dir = get_recordings_dir(username, camera.id, camera.name)
+            filepath = os.path.join(recordings_dir, filename)
+            
+            if os.path.exists(filepath):
+                try:
+                    os.remove(filepath)
+                    print(f"Successfully deleted: {filename}")
+                    return jsonify({"success": True, "message": "Recording deleted successfully"})
+                except PermissionError as pe:
+                    print(f"Permission error: {pe}")
+                    return jsonify({"error": "File is in use or permission denied"}), 403
+                except Exception as e:
+                    print(f"Error deleting file: {e}")
+                    return jsonify({"error": str(e)}), 500
+        
+        print(f"Video not found: {filename}")
+        return jsonify({"error": "Video not found"}), 404
             
     except Exception as e:
         print(f"Error in delete_recording: {e}")
@@ -1388,6 +1516,134 @@ def get_system_health():
         }), 500
     except Exception as e:
         print(f"Error getting system health: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Server-Side Recording Endpoints
+@app.route('/api/cameras/<int:camera_id>/recording/start', methods=['POST'])
+def start_camera_recording(camera_id):
+    """Start server-side recording for a specific camera"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        device_index = data.get('device_index', 0)
+        duration = data.get('duration', 60)  # Default 60 seconds per segment
+        
+        if not username:
+            return jsonify({"error": "Username is required"}), 400
+        
+        # Get camera from database
+        camera = Camera.query.filter_by(id=camera_id, username=username).first()
+        if not camera:
+            return jsonify({"error": "Camera not found"}), 404
+        
+        # Start recording (pass RTSP URL if it's an IP camera)
+        success = recording_manager.start_recording(
+            camera_id=camera.id,
+            camera_name=camera.name,
+            username=username,
+            device_index=device_index,
+            duration=duration,
+            rtsp_url=camera.rtsp_url if camera.camera_type == 'IP' else None
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Started recording camera {camera.name}",
+                "camera_id": camera_id,
+                "duration": duration
+            })
+        else:
+            return jsonify({"error": "Camera is already recording"}), 400
+            
+    except Exception as e:
+        print(f"Error starting recording: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/cameras/<int:camera_id>/recording/stop', methods=['POST'])
+def stop_camera_recording(camera_id):
+    """Stop server-side recording for a specific camera"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        
+        if not username:
+            return jsonify({"error": "Username is required"}), 400
+        
+        # Verify camera exists
+        camera = Camera.query.filter_by(id=camera_id, username=username).first()
+        if not camera:
+            return jsonify({"error": "Camera not found"}), 404
+        
+        success = recording_manager.stop_recording(camera_id)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Stopped recording camera {camera.name}",
+                "camera_id": camera_id
+            })
+        else:
+            return jsonify({"error": "Camera is not recording"}), 400
+            
+    except Exception as e:
+        print(f"Error stopping recording: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/cameras/<int:camera_id>/recording/status', methods=['GET'])
+def get_recording_status(camera_id):
+    """Get recording status for a specific camera"""
+    try:
+        username = request.args.get('username')
+        
+        if not username:
+            return jsonify({"error": "Username is required"}), 400
+        
+        camera = Camera.query.filter_by(id=camera_id, username=username).first()
+        if not camera:
+            return jsonify({"error": "Camera not found"}), 404
+        
+        is_recording = recording_manager.is_recording(camera_id)
+        
+        return jsonify({
+            "camera_id": camera_id,
+            "camera_name": camera.name,
+            "is_recording": is_recording
+        })
+        
+    except Exception as e:
+        print(f"Error getting recording status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/recordings/active', methods=['GET'])
+def get_active_recordings():
+    """Get list of all cameras currently recording"""
+    try:
+        username = request.args.get('username')
+        
+        if not username:
+            return jsonify({"error": "Username is required"}), 400
+        
+        active_camera_ids = recording_manager.get_active_recordings()
+        
+        # Get camera details
+        active_cameras = []
+        for cam_id in active_camera_ids:
+            camera = Camera.query.filter_by(id=cam_id, username=username).first()
+            if camera:
+                active_cameras.append({
+                    "id": camera.id,
+                    "name": camera.name,
+                    "type": camera.camera_type
+                })
+        
+        return jsonify({
+            "active_recordings": active_cameras,
+            "count": len(active_cameras)
+        })
+        
+    except Exception as e:
+        print(f"Error getting active recordings: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
