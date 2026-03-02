@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Face Recognition Security System with React Frontend and Flask Backend",
   "scripts": {
-    "dev": "powershell -ExecutionPolicy Bypass -File ./start-dev.ps1",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "frontend": "cd frontend-react && npm run dev",
     "backend": "cd backend && python app.py",
     "install-all": "cd frontend-react && npm install && cd ../backend && python -m pip install -r requirements.txt",
