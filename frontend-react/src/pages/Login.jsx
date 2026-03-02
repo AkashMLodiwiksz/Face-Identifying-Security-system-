@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, Shield, Camera, Users, Bell } from 'lucide-react';
 import api from '../services/api';
-import backgroundRecordingService from '../services/backgroundRecording';
+
 
 export default function Login() {
   const navigate = useNavigate();
@@ -43,16 +43,9 @@ export default function Login() {
           localStorage.setItem('userRole', response.data.user.role);
         }
         
-        // Start background recording service automatically
-        try {
-          console.log('📍 Attempting to start background recording...');
-          await backgroundRecordingService.start();
-          console.log('✅ Background recording service started after login');
-        } catch (recordingError) {
-          console.error('❌ Could not start background recording:', recordingError);
-          console.error('❌ Recording error details:', recordingError.name, recordingError.message);
-          // Don't block login if recording fails
-        }
+        // Clear manual-stop flag and recording start time on fresh login
+        localStorage.removeItem('manualRecordingStopped');
+        localStorage.removeItem('recordingStartTime');
         
         // Redirect to dashboard
         navigate('/dashboard');

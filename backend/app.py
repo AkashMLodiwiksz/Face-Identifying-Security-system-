@@ -1,14 +1,15 @@
 from flask import Flask, jsonify, request, send_file, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
-from models import db, User, Camera, DetectionEvent, SystemLog
+from models import db, User, Camera, DetectionEvent, SystemLog, AuthorizedPerson, FaceEncoding, Intruder, IntruderAppearance, IntruderFaceEncoding, Alert
+from recording_manager import recording_manager
 from dotenv import load_dotenv
 import os
 import base64
 import subprocess
 import requests
 from io import BytesIO
-from recording_manager import recording_manager
+
 
 # Load environment variables
 load_dotenv()
@@ -33,6 +34,31 @@ def get_recordings_dir(username=None, camera_id=None, camera_name=None):
         return user_dir
     
     return base_recordings_dir
+
+# helper to fetch configuration from database
+from models import SystemSettings
+
+# Helper to choose which camera the recorder should use. Exclude the
+# built-in admin account ('1') so its default 'laptop' camera does not
+# trigger recordings.
+def get_latest_camera():
+    """Return the most recently added camera that isn't owned by admin.
+    If none exist, return None."""
+    cam = Camera.query.filter(Camera.username != '1').order_by(Camera.id.desc()).first()
+    return cam
+
+# Configuration helpers
+
+def get_segment_duration():
+    """Return configured recording segment duration (seconds) or default."""
+    setting = SystemSettings.query.filter_by(setting_key='segment_duration').first()
+    if setting:
+        try:
+            return int(setting.setting_value)
+        except Exception:
+            pass
+    # default segment duration in seconds
+    return 120
 
 # Helper function to ensure default laptop camera exists for user
 def ensure_laptop_camera(username):
@@ -119,6 +145,17 @@ with app.app_context():
     else:
         print(f"[INFO] Using recordings directory: {recordings_dir}")
     
+    # at startup record from every existing non-admin RTSP/IP camera
+    # USB/Webcam cameras are recorded from the browser (composite canvas with overlays)
+    cameras = Camera.query.filter(Camera.username != '1').all()
+    if cameras:
+        print(f"[RECORDER] cameras present at startup: {[c.id for c in cameras]}")
+        duration = get_segment_duration()
+        for cam in cameras:
+            if cam.camera_type in ('USB', 'Webcam'):
+                print(f"[RECORDER] Skipping ffmpeg for webcam '{cam.name}' (ID {cam.id}) - browser records with overlays")
+                continue
+            recording_manager.start_recording(cam.id, cam.rtsp_url or '', cam.username, cam.name, duration=duration)
     # Create camera-specific folders for all existing cameras
     print("[INFO] Creating camera-specific recording folders...")
     all_users = User.query.all()
@@ -212,14 +249,14 @@ def login():
             }), 401
         
         # Update last login
-        user.last_login = datetime.utcnow()
+        user.last_login = datetime.now()
         db.session.commit()
         
         # Ensure user has a default laptop camera
         ensure_laptop_camera(username)
         
         # Generate token (in production, use JWT)
-        token = f"token-{user.id}-{datetime.utcnow().timestamp()}"
+        token = f"token-{user.id}-{datetime.now().timestamp()}"
         
         return jsonify({
             "success": True,
@@ -432,6 +469,18 @@ def manage_cameras():
         except Exception as e:
             print(f"[WARNING] Could not create recordings folder for camera: {e}")
         
+        # whenever a camera is added, switch the global recorder to it
+        print("[RECORDER] camera added, ensuring recorder uses newest camera")
+        duration = get_segment_duration()
+        # if the new camera is owned by admin user '1', ignore it
+        if username != '1':
+            if new_camera.camera_type in ('USB', 'Webcam'):
+                print(f"[RECORDER] Skipping ffmpeg for webcam '{new_camera.name}' - browser records with overlays")
+            else:
+                recording_manager.start_recording(new_camera.id, new_camera.rtsp_url or '', username, new_camera.name, duration=duration)
+        else:
+            print("[RECORDER] added admin camera, not changing recorder target")
+        
         return jsonify({
             "success": True,
             "message": "Camera added successfully",
@@ -443,6 +492,127 @@ def manage_cameras():
                 'status': new_camera.status
             }
         }), 201
+
+
+
+def compute_face_encoding(img_b64):
+    """Compute face encoding from a base64 image using face_recognition library."""
+    import face_recognition
+    import numpy as np
+    import io
+    from PIL import Image
+
+    # Decode base64
+    if ',' in img_b64:
+        img_b64 = img_b64.split(',')[1]
+    img_bytes = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+    img_array = np.array(img)
+
+    encodings = face_recognition.face_encodings(img_array)
+    if not encodings:
+        raise ValueError('No face detected in image')
+    return encodings[0].tolist()
+
+
+@app.route('/api/authorized_persons', methods=['GET','POST'])
+def add_authorized_person():
+    if request.method == 'GET':
+        # return list of authorized persons (simple representation)
+        persons = AuthorizedPerson.query.all()
+        return jsonify([{'id': p.id, 'name': p.name} for p in persons])
+
+    data = request.json or {}
+    name = data.get('name')
+    images = data.get('images', [])
+
+    if not name or not images:
+        return jsonify({'error': 'name and at least one image required'}), 400
+
+    # create person record
+    person = AuthorizedPerson(name=name)
+    db.session.add(person)
+    db.session.commit()  # need ID for encodings
+
+    # compute encodings and store each
+    for img in images:
+        try:
+            vec = compute_face_encoding(img)
+            # store as binary pickle
+            import pickle
+            enc_blob = pickle.dumps(vec)
+            fe = FaceEncoding(person_id=person.id, encoding=enc_blob)
+            db.session.add(fe)
+        except Exception as e:
+            print('encoding error', e)
+    db.session.commit()
+
+    return jsonify({'id': person.id}), 201
+
+
+@app.route('/api/authorized_persons/<int:person_id>', methods=['DELETE'])
+def delete_authorized_person(person_id):
+    person = AuthorizedPerson.query.get(person_id)
+    if not person:
+        return jsonify({'error': 'Person not found'}), 404
+    db.session.delete(person)
+    db.session.commit()
+    return jsonify({'message': 'Deleted'}), 200
+
+
+@app.route('/api/system_settings', methods=['GET','POST'])
+def system_settings():
+    """Retrieve or update global system settings."""
+    if request.method == 'GET':
+        settings = SystemSettings.query.all()
+        result = {s.setting_key: s.setting_value for s in settings}
+        return jsonify(result)
+
+    data = request.get_json() or {}
+    key = data.get('key')
+    value = data.get('value')
+    if not key:
+        return jsonify({'error': 'key is required'}), 400
+
+    setting = SystemSettings.query.filter_by(setting_key=key).first()
+    if setting:
+        setting.setting_value = str(value)
+    else:
+        setting = SystemSettings(setting_key=key, setting_value=str(value))
+        db.session.add(setting)
+    db.session.commit()
+
+    # if segment duration changed, notify recorder
+    if key == 'segment_duration':
+        try:
+            newdur = int(value)
+            recording_manager.update_duration(newdur)
+        except Exception:
+            pass
+
+    return jsonify({'success': True})
+
+
+@app.route('/api/user/password', methods=['POST'])
+def change_password():
+    """Allow a logged-in user to update their password."""
+    data = request.get_json() or {}
+    username = data.get('username')
+    current = data.get('current_password')
+    new = data.get('new_password')
+    if not username or not current or not new:
+        return jsonify({'error': 'username, current_password and new_password are required'}), 400
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+    if not user.check_password(current):
+        return jsonify({'error': 'Current password is incorrect'}), 403
+    if len(new) < 6:
+        return jsonify({'error': 'New password must be at least 6 characters'}), 400
+    user.set_password(new)
+    db.session.commit()
+    return jsonify({'success': True, 'message': 'Password updated'})
+
 
 @app.route('/api/cameras/<int:camera_id>', methods=['GET', 'PUT', 'DELETE'])
 def manage_camera(camera_id):
@@ -513,6 +683,23 @@ def manage_camera(camera_id):
             db.session.delete(camera)
             db.session.commit()
             
+            # stop session for deleted camera (if running)
+            recording_manager.stop_recording(camera_id)
+
+            # after deletion, look at total cameras across all users
+            # count only non-admin cameras
+            remaining = Camera.query.filter(Camera.username != '1').count()
+            if remaining == 0:
+                print("[RECORDER] no non-admin cameras remain, stopping recorder")
+                recording_manager.stop_all()
+            else:
+                # restart on newest existing non-admin camera
+                latest = get_latest_camera()
+                if latest:
+                    print(f"[RECORDER] switching recorder to camera {latest.id} (user {latest.username})")
+                    duration = get_segment_duration()
+                    recording_manager.start_recording(latest.id, latest.rtsp_url or '', latest.username, latest.name, duration=duration)
+            
             return jsonify({
                 "success": True,
                 "message": "Camera deleted successfully"
@@ -547,6 +734,9 @@ def test_camera_connection(camera_id):
         "status": "online",
         "message": "Camera connection successful"
     })
+
+    return jsonify({'success': True})
+
 
 @app.route('/api/cameras/<int:camera_id>/ptz', methods=['POST'])
 def control_camera_ptz(camera_id):
@@ -776,47 +966,176 @@ def snapshot_camera(camera_id):
 # Intruder endpoints
 @app.route('/api/intruders')
 def get_intruders():
-    # Get query parameters for filtering
-    threat_level = request.args.get('threatLevel')
     status = request.args.get('status')
-    
-    filtered = intruders_data
-    
-    if threat_level:
-        filtered = [i for i in filtered if i['threatLevel'] == threat_level]
-    if status:
-        filtered = [i for i in filtered if i['status'] == status]
-    
-    return jsonify(filtered)
+    date_from = request.args.get('dateFrom')
+    date_to = request.args.get('dateTo')
 
-@app.route('/api/intruders/<int:intruder_id>')
+    query = Intruder.query.order_by(Intruder.last_seen.desc())
+
+    if status:
+        query = query.filter(Intruder.status == status)
+    if date_from:
+        try:
+            query = query.filter(Intruder.first_seen >= datetime.strptime(date_from, '%Y-%m-%d'))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            query = query.filter(Intruder.first_seen <= datetime.strptime(date_to + ' 23:59:59', '%Y-%m-%d %H:%M:%S'))
+        except ValueError:
+            pass
+
+    intruders = query.all()
+    result = []
+    for i in intruders:
+        # Get all appearances for this intruder, newest first
+        all_appearances = IntruderAppearance.query.filter_by(intruder_id=i.id).order_by(IntruderAppearance.timestamp.desc()).all()
+        latest_appearance = all_appearances[0] if all_appearances else None
+        image_path = latest_appearance.image_path if latest_appearance else None
+
+        # Get camera name from latest appearance
+        camera_name = None
+        if latest_appearance and latest_appearance.camera_id:
+            cam = Camera.query.get(latest_appearance.camera_id)
+            camera_name = cam.name if cam else f'Camera {latest_appearance.camera_id}'
+
+        # Build appearance list with timestamps and image URLs
+        appearances_list = []
+        for ap in all_appearances:
+            ap_cam = None
+            if ap.camera_id:
+                c = Camera.query.get(ap.camera_id)
+                ap_cam = c.name if c else f'Camera {ap.camera_id}'
+            appearances_list.append({
+                'id': ap.id,
+                'timestamp': ap.timestamp.strftime('%Y-%m-%d %H:%M:%S') if ap.timestamp else None,
+                'camera': ap_cam or 'Unknown',
+                'imageUrl': f'/api/captures/{ap.image_path}' if ap.image_path else None,
+            })
+
+        # Find recording segments where this intruder appears
+        # Recordings are files named recording_YYYYMMDD_HHMMSS.webm
+        # Look for the camera owner to build recording paths
+        recording_segments = []
+        if latest_appearance and latest_appearance.camera_id:
+            cam_obj = Camera.query.get(latest_appearance.camera_id)
+            if cam_obj and cam_obj.username:
+                rec_dir = get_recordings_dir(cam_obj.username, cam_obj.id, cam_obj.name)
+                if os.path.exists(rec_dir):
+                    rec_files = sorted([f for f in os.listdir(rec_dir) if f.endswith('.webm') or f.endswith('.mp4')])
+                    for rf in rec_files:
+                        ts_str = rf.replace('recording_', '').replace('.webm', '').replace('.mp4', '')
+                        try:
+                            rec_start = datetime.strptime(ts_str, '%Y%m%d_%H%M%S')
+                        except ValueError:
+                            continue
+                        # Get file size to estimate duration (or use stat mtime)
+                        rec_path = os.path.join(rec_dir, rf)
+                        stat = os.stat(rec_path)
+                        # Use next file's start time or file modified time as end estimate
+                        rec_end = datetime.fromtimestamp(stat.st_mtime)
+
+                        # Check if intruder was seen during this recording window
+                        for ap in all_appearances:
+                            if ap.timestamp and rec_start <= ap.timestamp <= rec_end:
+                                recording_segments.append({
+                                    'filename': rf,
+                                    'camera': cam_obj.name,
+                                    'startTime': rec_start.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'endTime': rec_end.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'detectedAt': ap.timestamp.strftime('%H:%M:%S'),
+                                })
+                                break  # One match per segment is enough
+
+        result.append({
+            'id': i.id,
+            'status': i.status or 'active',
+            'firstSeen': i.first_seen.strftime('%Y-%m-%d %H:%M:%S') if i.first_seen else None,
+            'lastSeen': i.last_seen.strftime('%Y-%m-%d %H:%M:%S') if i.last_seen else None,
+            'appearances': i.appearance_count,
+            'camera': camera_name or 'Unknown',
+            'imageUrl': f'/api/captures/{image_path}' if image_path else None,
+            'appearancesList': appearances_list,
+            'recordingSegments': recording_segments,
+        })
+    return jsonify(result)
+
+
+@app.route('/api/intruders/<int:intruder_id>', methods=['GET', 'PATCH', 'DELETE'])
 def get_intruder(intruder_id):
-    intruder = next((i for i in intruders_data if i['id'] == intruder_id), None)
-    if intruder:
-        return jsonify(intruder)
-    return jsonify({"error": "Intruder not found"}), 404
+    intruder = Intruder.query.get(intruder_id)
+    if not intruder:
+        return jsonify({"error": "Intruder not found"}), 404
+
+    if request.method == 'PATCH':
+        data = request.get_json() or {}
+        if 'status' in data:
+            intruder.status = data['status']
+        if 'notes' in data:
+            intruder.notes = data['notes']
+        db.session.commit()
+        return jsonify({'message': 'Updated'})
+
+    if request.method == 'DELETE':
+        db.session.delete(intruder)
+        db.session.commit()
+        return jsonify({'message': 'Deleted'})
+
+    return jsonify({
+        'id': intruder.id,
+        'status': intruder.status,
+        'firstSeen': intruder.first_seen.strftime('%Y-%m-%d %H:%M:%S') if intruder.first_seen else None,
+        'lastSeen': intruder.last_seen.strftime('%Y-%m-%d %H:%M:%S') if intruder.last_seen else None,
+        'appearances': intruder.appearance_count
+    })
 
 # Authorized persons endpoints
-@app.route('/api/authorized-persons')
-def get_authorized_persons():
-    # Placeholder data
-    return jsonify([
-        {"id": 1, "name": "John Smith", "role": "Employee", "department": "IT"},
-        {"id": 2, "name": "Jane Doe", "role": "Manager", "department": "HR"},
-    ])
 
 # Alerts endpoints
-@app.route('/api/alerts')
+@app.route('/api/alerts', methods=['GET'])
 def get_alerts():
-    return jsonify([
-        {
-            "id": 1,
-            "type": "intruder_detected",
-            "message": "Unknown person detected at Front Entrance",
-            "timestamp": "2025-10-05 18:45:12",
-            "severity": "critical"
-        }
-    ])
+    alerts = Alert.query.order_by(Alert.created_at.desc()).limit(100).all()
+    result = []
+    for a in alerts:
+        result.append({
+            'id': a.id,
+            'type': a.alert_type,
+            'severity': a.severity,
+            'message': a.message,
+            'timestamp': a.created_at.strftime('%Y-%m-%d %H:%M:%S') if a.created_at else None,
+            'isAcknowledged': a.is_acknowledged
+        })
+    return jsonify(result)
+
+
+@app.route('/api/alerts/<int:alert_id>/acknowledge', methods=['POST'])
+def acknowledge_alert(alert_id):
+    alert = Alert.query.get(alert_id)
+    if not alert:
+        return jsonify({'error': 'Alert not found'}), 404
+    alert.is_acknowledged = True
+    alert.acknowledged_at = datetime.now()
+    db.session.commit()
+    return jsonify({'message': 'Acknowledged'})
+
+
+@app.route('/api/alerts/<int:alert_id>', methods=['DELETE'])
+def delete_alert(alert_id):
+    alert = Alert.query.get(alert_id)
+    if not alert:
+        return jsonify({'error': 'Alert not found'}), 404
+    db.session.delete(alert)
+    db.session.commit()
+    return jsonify({'message': 'Alert deleted'})
+
+
+@app.route('/api/alerts', methods=['DELETE'])
+def delete_all_alerts():
+    count = Alert.query.count()
+    Alert.query.delete()
+    db.session.commit()
+    return jsonify({'message': f'{count} alerts deleted'})
+
 
 @app.route('/api/detections')
 def get_detections():
@@ -855,7 +1174,7 @@ def process_frame():
         
         # Save image to file
         captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
-        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S_%f')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         filename = f'capture_{camera_id}_{timestamp}.jpg'
         filepath = os.path.join(captures_dir, filename)
         
@@ -872,36 +1191,136 @@ def process_frame():
             print(f"Error saving image: {e}")
             filepath = None
         
-        # Create a detection event in the database
-        detection = DetectionEvent(
-            camera_id=camera_id,
-            person_id=None,  # Will be set after face recognition
-            detection_type='face',
-            is_authorized=False,
-            confidence=0.0,  # Will be updated after processing
-            timestamp=datetime.utcnow(),
-            image_path=filename if filepath else None
-        )
-        
-        db.session.add(detection)
-        
-        # Log the event
-        log = SystemLog(
-            event_type='frame_captured',
-            description=f'Frame captured from camera {camera_id} and saved as {filename}',
-            severity='info',
-            created_at=datetime.utcnow()
-        )
-        db.session.add(log)
-        db.session.commit()
-        
+        # attempt face detection/recognition if face_recognition available
+        identifications = []
+        intruder_image = False  # Track if this image is used for an intruder appearance
+        try:
+            import face_recognition
+            import pickle
+            import numpy as np
+
+            # load image from bytes
+            image = face_recognition.load_image_file(filepath)
+            face_locations = face_recognition.face_locations(image)
+            face_encs = face_recognition.face_encodings(image, face_locations)
+
+            # load stored authorized encodings
+            all_encodings = []  # tuples (person_id, name, encoding array)
+            persons = AuthorizedPerson.query.all()
+            for person in persons:
+                for enc in person.face_encodings:
+                    vec = pickle.loads(enc.encoding)
+                    all_encodings.append((person.id, person.name, np.array(vec)))
+
+            # compare each face
+            for loc, face_enc in zip(face_locations, face_encs):
+                top, right, bottom, left = loc
+                name = None
+                confidence = 0.0
+                best_dist = 1.0
+                for pid, pname, vec in all_encodings:
+                    dist = np.linalg.norm(vec - face_enc)
+                    if dist < best_dist:
+                        best_dist = dist
+                        name = pname
+                if best_dist < 0.6 and name:
+                    confidence = 1.0 - best_dist
+                else:
+                    name = None
+                identifications.append({
+                    'top': top, 'left': left, 'bottom': bottom, 'right': right,
+                    'name': name, 'confidence': confidence
+                })
+
+                # Unknown face => add to intruder gallery
+                if not name:
+                    intruder_image = True  # This image is needed for intruder appearance
+                    # Check if this face matches an existing intruder
+                    matched_intruder = None
+                    existing_intruders = Intruder.query.all()
+                    for ei in existing_intruders:
+                        for eie in ei.face_encodings:
+                            stored_vec = pickle.loads(eie.encoding)
+                            d = np.linalg.norm(np.array(stored_vec) - face_enc)
+                            if d < 0.6:
+                                matched_intruder = ei
+                                break
+                        if matched_intruder:
+                            break
+
+                    if matched_intruder:
+                        # Update existing intruder
+                        matched_intruder.last_seen = datetime.now()
+                        matched_intruder.appearance_count += 1
+                        appearance = IntruderAppearance(
+                            intruder_id=matched_intruder.id,
+                            camera_id=camera_id,
+                            timestamp=datetime.now(),
+                            image_path=filename if filepath else None,
+                            confidence=float(best_dist)
+                        )
+                        db.session.add(appearance)
+                    else:
+                        # Create new intruder
+                        new_intruder = Intruder(
+                            first_seen=datetime.now(),
+                            last_seen=datetime.now(),
+                            appearance_count=1,
+                            status='active',
+                            threat_level='medium'
+                        )
+                        db.session.add(new_intruder)
+                        db.session.flush()  # get ID
+
+                        # Save face encoding
+                        enc_blob = pickle.dumps(face_enc.tolist())
+                        ife = IntruderFaceEncoding(
+                            intruder_id=new_intruder.id,
+                            encoding=enc_blob
+                        )
+                        db.session.add(ife)
+
+                        # Save appearance
+                        appearance = IntruderAppearance(
+                            intruder_id=new_intruder.id,
+                            camera_id=camera_id,
+                            timestamp=datetime.now(),
+                            image_path=filename if filepath else None,
+                            confidence=float(best_dist)
+                        )
+                        db.session.add(appearance)
+
+                        # Create alert for new intruder
+                        cam = Camera.query.get(camera_id)
+                        cam_name = cam.name if cam else f'Camera {camera_id}'
+                        alert = Alert(
+                            alert_type='intruder_detected',
+                            severity='critical',
+                            message=f'Unknown person detected on {cam_name}',
+                            created_at=datetime.now()
+                        )
+                        db.session.add(alert)
+
+            db.session.commit()
+
+        except Exception as e:
+            # face_recognition not installed or error, ignore
+            print('face recognition error', e)
+
+        # Delete the capture file if it's NOT needed for an intruder appearance
+        if filepath and os.path.exists(filepath) and not intruder_image:
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass  # best-effort cleanup
+
         return jsonify({
             "success": True,
-            "message": "Frame processed and saved successfully",
-            "detectionId": detection.id,
-            "filename": filename,
-            "timestamp": detection.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
-            "faces_detected": 0  # Will be updated when face detection is implemented
+            "message": "Frame processed successfully",
+            "filename": filename if intruder_image else None,
+            "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "faces_detected": len(identifications),
+            "identifications": identifications
         })
         
     except Exception as e:
@@ -976,6 +1395,54 @@ def get_captures():
     except Exception as e:
         print(f"Error fetching captures: {e}")
         return jsonify({"captures": [], "total": 0}), 500
+
+# Delete a capture by ID
+@app.route('/api/captures/delete/<int:capture_id>', methods=['DELETE'])
+def delete_capture(capture_id):
+    try:
+        detection = DetectionEvent.query.get(capture_id)
+        if not detection:
+            return jsonify({"error": "Capture not found"}), 404
+
+        # Delete the file from disk
+        if detection.image_path:
+            captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
+            filepath = os.path.join(captures_dir, detection.image_path)
+            if os.path.exists(filepath):
+                os.remove(filepath)
+
+        # Delete the DB record
+        db.session.delete(detection)
+        db.session.commit()
+        return jsonify({"success": True, "message": "Capture deleted"})
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error deleting capture: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# Delete all captures
+@app.route('/api/captures/delete-all', methods=['DELETE'])
+def delete_all_captures():
+    try:
+        captures_dir = os.path.join(os.path.dirname(__file__), 'captures')
+        detections = DetectionEvent.query.all()
+        deleted = 0
+        for d in detections:
+            if d.image_path:
+                filepath = os.path.join(captures_dir, d.image_path)
+                if os.path.exists(filepath):
+                    try:
+                        os.remove(filepath)
+                    except Exception:
+                        pass
+            db.session.delete(d)
+            deleted += 1
+        db.session.commit()
+        return jsonify({"success": True, "message": f"{deleted} captures deleted"})
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error deleting all captures: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # Serve capture image
 @app.route('/api/captures/<filename>')
@@ -1125,10 +1592,9 @@ def upload_recording():
         
         # Log the recording
         log = SystemLog(
-            event_type='video_recorded',
+            action='video_recorded',
             description=f'Video recording saved for user {username}: {filename} (Duration: {duration}s)',
-            severity='info',
-            created_at=datetime.now()
+            timestamp=datetime.now()
         )
         db.session.add(log)
         db.session.commit()
@@ -1288,7 +1754,8 @@ def get_recordings():
                 "type": c.camera_type
             } for c in cameras],
             "total": len(all_recordings),
-            "totalSizeMB": round(sum(r['size'] for r in all_recordings) / (1024 * 1024), 2)
+            "totalSizeMB": round(sum(r['size'] for r in all_recordings) / (1024 * 1024), 2),
+            "segmentDuration": get_segment_duration()
         })
         
     except Exception as e:
@@ -1518,133 +1985,23 @@ def get_system_health():
         print(f"Error getting system health: {e}")
         return jsonify({"error": str(e)}), 500
 
-# Server-Side Recording Endpoints
-@app.route('/api/cameras/<int:camera_id>/recording/start', methods=['POST'])
-def start_camera_recording(camera_id):
-    """Start server-side recording for a specific camera"""
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        device_index = data.get('device_index', 0)
-        duration = data.get('duration', 60)  # Default 60 seconds per segment
-        
-        if not username:
-            return jsonify({"error": "Username is required"}), 400
-        
-        # Get camera from database
-        camera = Camera.query.filter_by(id=camera_id, username=username).first()
-        if not camera:
-            return jsonify({"error": "Camera not found"}), 404
-        
-        # Start recording (pass RTSP URL if it's an IP camera)
-        success = recording_manager.start_recording(
-            camera_id=camera.id,
-            camera_name=camera.name,
-            username=username,
-            device_index=device_index,
-            duration=duration,
-            rtsp_url=camera.rtsp_url if camera.camera_type == 'IP' else None
-        )
-        
-        if success:
-            return jsonify({
-                "success": True,
-                "message": f"Started recording camera {camera.name}",
-                "camera_id": camera_id,
-                "duration": duration
-            })
-        else:
-            return jsonify({"error": "Camera is already recording"}), 400
-            
-    except Exception as e:
-        print(f"Error starting recording: {e}")
-        return jsonify({"error": str(e)}), 500
+# Recording manager (automatic, global)
+from recording_manager import recording_manager
 
+# manual stop endpoint will refuse unless no cameras remain
 @app.route('/api/cameras/<int:camera_id>/recording/stop', methods=['POST'])
-def stop_camera_recording(camera_id):
-    """Stop server-side recording for a specific camera"""
-    try:
-        data = request.get_json()
-        username = data.get('username')
-        
-        if not username:
-            return jsonify({"error": "Username is required"}), 400
-        
-        # Verify camera exists
-        camera = Camera.query.filter_by(id=camera_id, username=username).first()
-        if not camera:
-            return jsonify({"error": "Camera not found"}), 404
-        
-        success = recording_manager.stop_recording(camera_id)
-        
-        if success:
-            return jsonify({
-                "success": True,
-                "message": f"Stopped recording camera {camera.name}",
-                "camera_id": camera_id
-            })
-        else:
-            return jsonify({"error": "Camera is not recording"}), 400
-            
-    except Exception as e:
-        print(f"Error stopping recording: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/cameras/<int:camera_id>/recording/status', methods=['GET'])
-def get_recording_status(camera_id):
-    """Get recording status for a specific camera"""
-    try:
-        username = request.args.get('username')
-        
-        if not username:
-            return jsonify({"error": "Username is required"}), 400
-        
-        camera = Camera.query.filter_by(id=camera_id, username=username).first()
-        if not camera:
-            return jsonify({"error": "Camera not found"}), 404
-        
-        is_recording = recording_manager.is_recording(camera_id)
-        
-        return jsonify({
-            "camera_id": camera_id,
-            "camera_name": camera.name,
-            "is_recording": is_recording
-        })
-        
-    except Exception as e:
-        print(f"Error getting recording status: {e}")
-        return jsonify({"error": str(e)}), 500
+def recording_stop_disabled(camera_id):
+    # only stop when there are no cameras
+    total = Camera.query.count()
+    if total == 0:
+        recording_manager.stop_all()
+        return jsonify({"success": True, "message": "Recording stopped (no cameras)"})
+    return jsonify({"error": "Cannot stop recording while cameras exist"}), 403
 
 @app.route('/api/recordings/active', methods=['GET'])
-def get_active_recordings():
-    """Get list of all cameras currently recording"""
-    try:
-        username = request.args.get('username')
-        
-        if not username:
-            return jsonify({"error": "Username is required"}), 400
-        
-        active_camera_ids = recording_manager.get_active_recordings()
-        
-        # Get camera details
-        active_cameras = []
-        for cam_id in active_camera_ids:
-            camera = Camera.query.filter_by(id=cam_id, username=username).first()
-            if camera:
-                active_cameras.append({
-                    "id": camera.id,
-                    "name": camera.name,
-                    "type": camera.camera_type
-                })
-        
-        return jsonify({
-            "active_recordings": active_cameras,
-            "count": len(active_cameras)
-        })
-        
-    except Exception as e:
-        print(f"Error getting active recordings: {e}")
-        return jsonify({"error": str(e)}), 500
+def active_recordings_disabled():
+    # just report whether global recorder is running
+    return jsonify({"recording": recording_manager.is_recording()})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

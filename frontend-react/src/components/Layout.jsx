@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import backgroundRecordingService from '../services/backgroundRecording';
 import LiveClock from './LiveClock';
 import { 
   LayoutDashboard, 
@@ -22,6 +21,10 @@ import {
 const Layout = ({ children }) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [recordingActive, setRecordingActive] = useState(false);
+  const [unreadAlertCount, setUnreadAlertCount] = useState(0);
+
+  // make sure indicator checks even when sidebar collapsed
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -32,15 +35,11 @@ const Layout = ({ children }) => {
     { path: '/intruders', icon: UserX, label: 'Intruder Gallery' },
     { path: '/authorized-persons', icon: Users, label: 'Authorized Persons' },
     { path: '/alerts', icon: Bell, label: 'Alerts' },
-    { path: '/detections', icon: Eye, label: 'Detection Events' },
     { path: '/cameras', icon: Video, label: 'Camera Management' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 
   const handleLogout = () => {
-    // Stop background recording service
-    backgroundRecordingService.stop();
-    
     // Clear both localStorage and sessionStorage
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');
@@ -55,6 +54,45 @@ const Layout = ({ children }) => {
   const username = localStorage.getItem('username') || sessionStorage.getItem('username') || 'User';
   const userRole = localStorage.getItem('userRole') || sessionStorage.getItem('userRole') || 'User';
 
+  // poll recording status
+  useEffect(() => {
+    let interval = null;
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`/api/recordings/active`);
+        if (res.ok) {
+          const data = await res.json();
+          setRecordingActive(!!data.recording);
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+    checkStatus();
+    interval = setInterval(checkStatus, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll unread alert count
+  useEffect(() => {
+    const fetchAlertCount = async () => {
+      try {
+        const res = await fetch('http://localhost:5000/api/alerts');
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setUnreadAlertCount(data.filter(a => !a.isAcknowledged).length);
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    };
+    fetchAlertCount();
+    const interval = setInterval(fetchAlertCount, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-dark">
       {/* Sidebar */}
@@ -64,9 +102,22 @@ const Layout = ({ children }) => {
         }`}
       >
         {/* Logo */}
-        <div className="h-16 flex items-center justify-between px-4 border-b border-gray-700">
+        <div className="h-16 flex items-center justify-between px-4 border-b border-gray-700 relative">
           {sidebarOpen && (
             <span className="text-xl font-bold animate-fade-in">SecureVision AI</span>
+          )}
+          {recordingActive && (
+            <>
+              <span className="absolute top-2 right-2 bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
+                REC
+              </span>
+              {sidebarOpen && (
+                <div className="absolute top-12 right-4 flex items-center space-x-1">
+                  <span className="w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+                  <span className="text-xs text-red-500 font-semibold">Recording</span>
+                </div>
+              )}
+            </>
           )}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -136,11 +187,26 @@ const Layout = ({ children }) => {
           <div className="flex items-center space-x-6">
             {/* Live Clock */}
             <LiveClock />
+            {/* small recording badge by clock */}
+            {recordingActive && (
+              <div className="flex items-center space-x-1 text-red-500 text-xs">
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                <span>REC</span>
+              </div>
+            )}
 
-            {/* Notifications */}
-            <button className="relative p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
+            {/* Notifications - click to go to Alerts */}
+            <button
+              onClick={() => navigate('/alerts')}
+              className="relative p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="Alerts"
+            >
               <Bell className="w-5 h-5" />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+              {unreadAlertCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center bg-red-500 text-white text-[10px] font-bold rounded-full px-1 animate-pulse">
+                  {unreadAlertCount > 99 ? '99+' : unreadAlertCount}
+                </span>
+              )}
             </button>
 
             {/* User Dropdown */}

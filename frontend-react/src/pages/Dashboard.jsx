@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import backgroundRecordingService from '../services/backgroundRecording';
+import api from '../services/api';
 import { 
   Camera, 
   Users, 
@@ -13,7 +14,8 @@ import {
   Video,
   CheckCircle,
   XCircle,
-  Bell
+  Bell,
+  ArrowRight
 } from 'lucide-react';
 
 const Dashboard = () => {
@@ -25,6 +27,8 @@ const Dashboard = () => {
   });
 
   const [cameras, setCameras] = useState([]);
+  const [recentAlerts, setRecentAlerts] = useState([]);
+  const navigate = useNavigate();
 
   const [systemHealth, setSystemHealth] = useState({
     cpu: { percent: 0, cores: 0 },
@@ -33,10 +37,6 @@ const Dashboard = () => {
     network: { sent_mb: 0, recv_mb: 0 }
   });
 
-  const [recordingStatus, setRecordingStatus] = useState({
-    isRecording: false,
-    recordingTime: 0
-  });
 
   // Fetch camera data
   useEffect(() => {
@@ -90,6 +90,71 @@ const Dashboard = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch recent alerts from API
+  useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        const res = await api.get('/alerts');
+        setRecentAlerts(Array.isArray(res.data) ? res.data.slice(0, 3) : []);
+      } catch (err) {
+        console.error('Error fetching alerts:', err);
+      }
+    };
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch authorized persons count
+  useEffect(() => {
+    const fetchAuthorized = async () => {
+      try {
+        const res = await api.get('/authorized_persons');
+        const persons = Array.isArray(res.data) ? res.data : [];
+        const activeCount = persons.length;
+        setStats(prev => ({
+          ...prev,
+          authorizedPersons: { total: activeCount, active: activeCount, inactive: 0 }
+        }));
+      } catch (err) {
+        console.error('Error fetching authorized persons:', err);
+      }
+    };
+    fetchAuthorized();
+  }, []);
+
+  // Fetch intruders detected count
+  useEffect(() => {
+    const fetchIntruders = async () => {
+      try {
+        const res = await api.get('/intruders');
+        const intruders = Array.isArray(res.data) ? res.data : [];
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startOfWeek = new Date(startOfToday);
+        startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+        let today = 0, thisWeek = 0, thisMonth = 0;
+        intruders.forEach(i => {
+          const seen = new Date(i.firstSeen);
+          if (seen >= startOfToday) today++;
+          if (seen >= startOfWeek) thisWeek++;
+          if (seen >= startOfMonth) thisMonth++;
+        });
+        setStats(prev => ({
+          ...prev,
+          intrudersDetected: { today, thisWeek, thisMonth }
+        }));
+      } catch (err) {
+        console.error('Error fetching intruders:', err);
+      }
+    };
+    fetchIntruders();
+    const interval = setInterval(fetchIntruders, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Fetch system health data
   useEffect(() => {
     const fetchSystemHealth = async () => {
@@ -111,71 +176,11 @@ const Dashboard = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-start recording if not already started (for direct dashboard access)
-  useEffect(() => {
-    const initializeRecording = async () => {
-      try {
-        const status = backgroundRecordingService.getStatus();
-        
-        // If recording is not initialized, start it
-        if (!status.isInitialized) {
-          console.log('📍 Dashboard: Recording not started, initializing...');
-          // Start recording asynchronously without blocking UI
-          backgroundRecordingService.start().catch(error => {
-            console.warn('⚠️ Dashboard: Background recording failed (camera may be in use):', error.message);
-            // Don't throw error, just log it - recording is optional
-          });
-        } else {
-          console.log('✅ Dashboard: Recording already active');
-        }
-      } catch (error) {
-        console.error('❌ Dashboard: Error checking recording status:', error);
-      }
-    };
 
-    // Delay initialization slightly to let UI render first
-    const timer = setTimeout(() => {
-      initializeRecording();
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, []); // Run once on mount
-
-  // Check background recording status
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const status = backgroundRecordingService.getStatus();
-      setRecordingStatus({
-        isRecording: status.isRecording,
-        recordingTime: status.recordingTime
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Format recording time
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
 
   return (
     <Layout>
       <div className="p-6 space-y-8">
-        {/* Compact Recording Status Indicator - No Controls */}
-        {recordingStatus.isRecording && (
-          <div className="bg-red-500 text-white px-4 py-2 rounded-lg flex items-center justify-between text-sm">
-            <div className="flex items-center space-x-2">
-              <div className="w-2 h-2 bg-white rounded-full animate-ping"></div>
-              <Video className="w-4 h-4" />
-              <span className="font-medium">Recording</span>
-            </div>
-            <span className="font-mono">{formatTime(recordingStatus.recordingTime)}</span>
-          </div>
-        )}
-
         {/* Main Stats Grid - Larger Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
           {/* Active Cameras - Detailed */}
@@ -291,33 +296,62 @@ const Dashboard = () => {
                 <Bell className="w-5 h-5 mr-2 text-red-500" />
                 Recent Alerts
               </h3>
-              <span className="text-xs bg-red-100 text-red-700 px-3 py-1 rounded-full font-semibold">
-                3 New
-              </span>
+              {recentAlerts.filter(a => !a.isAcknowledged).length > 0 && (
+                <span className="text-xs bg-red-100 text-red-700 px-3 py-1 rounded-full font-semibold">
+                  {recentAlerts.filter(a => !a.isAcknowledged).length} New
+                </span>
+              )}
             </div>
             <div className="space-y-3 overflow-y-auto scrollbar-thin flex-1 pr-2">
-              <div className="p-4 bg-red-50 dark:bg-red-900 dark:bg-opacity-20 rounded-lg border-l-4 border-red-500">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-semibold text-red-800 dark:text-red-300">Unknown Person</span>
-                  <span className="text-xs text-gray-500">2 min ago</span>
+              {recentAlerts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <Bell className="w-12 h-12 mb-2 opacity-50" />
+                  <p className="text-sm">No alerts yet</p>
                 </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Camera 3 - Main Entrance</p>
-              </div>
-              <div className="p-4 bg-yellow-50 dark:bg-yellow-900 dark:bg-opacity-20 rounded-lg border-l-4 border-yellow-500">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-semibold text-yellow-800 dark:text-yellow-300">Suspicious Activity</span>
-                  <span className="text-xs text-gray-500">15 min ago</span>
-                </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Camera 5 - Parking Lot</p>
-              </div>
-              <div className="p-4 bg-orange-50 dark:bg-orange-900 dark:bg-opacity-20 rounded-lg border-l-4 border-orange-500">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">Loitering Detected</span>
-                  <span className="text-xs text-gray-500">1 hour ago</span>
-                </div>
-                <p className="text-xs text-gray-600 dark:text-gray-400">Camera 1 - Back Entrance</p>
-              </div>
+              ) : (
+                recentAlerts.map(alert => {
+                  const severityStyles = {
+                    critical: { bg: 'bg-red-50 dark:bg-red-900 dark:bg-opacity-20', border: 'border-red-500', title: 'text-red-800 dark:text-red-300' },
+                    high: { bg: 'bg-orange-50 dark:bg-orange-900 dark:bg-opacity-20', border: 'border-orange-500', title: 'text-orange-800 dark:text-orange-300' },
+                    medium: { bg: 'bg-yellow-50 dark:bg-yellow-900 dark:bg-opacity-20', border: 'border-yellow-500', title: 'text-yellow-800 dark:text-yellow-300' },
+                    low: { bg: 'bg-blue-50 dark:bg-blue-900 dark:bg-opacity-20', border: 'border-blue-500', title: 'text-blue-800 dark:text-blue-300' },
+                  };
+                  const s = severityStyles[alert.severity] || severityStyles.medium;
+                  // Time ago
+                  const timeAgo = (() => {
+                    if (!alert.timestamp) return '';
+                    const diff = Math.floor((Date.now() - new Date(alert.timestamp).getTime()) / 1000);
+                    if (diff < 60) return `${diff}s ago`;
+                    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                    return `${Math.floor(diff / 86400)}d ago`;
+                  })();
+                  return (
+                    <div key={alert.id} className={`p-4 ${s.bg} rounded-lg border-l-4 ${s.border}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className={`text-sm font-semibold ${s.title} flex items-center`}>
+                          {!alert.isAcknowledged && <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></span>}
+                          {alert.message || alert.type}
+                        </span>
+                        <span className="text-xs text-gray-500 whitespace-nowrap ml-2">{timeAgo}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] uppercase font-bold tracking-wide px-1.5 py-0.5 rounded ${s.bg} ${s.title}`}>{alert.severity}</span>
+                        {alert.isAcknowledged && <span className="text-[10px] text-green-500 font-medium">Acknowledged</span>}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
+            {recentAlerts.length > 0 && (
+              <button
+                onClick={() => navigate('/alerts')}
+                className="mt-3 flex items-center justify-center text-sm text-blue-500 hover:text-blue-400 transition-colors w-full py-2 border-t border-gray-200 dark:border-gray-700"
+              >
+                View All Alerts <ArrowRight className="w-4 h-4 ml-1" />
+              </button>
+            )}
           </div>
 
           {/* Camera Status */}

@@ -106,6 +106,11 @@ const Cameras = () => {
     e.preventDefault();
     
     try {
+      // client validation
+      if (!formData.name || formData.name.trim() === '') {
+        throw new Error('Name is required');
+      }
+
       if (editingCamera) {
         // Update existing camera
         await api.put(`/cameras/${editingCamera.id}`, {
@@ -123,46 +128,37 @@ const Cameras = () => {
         const cameraData = {
           ...formData,
           username,
-          // Set webcam cameras as online by default
           status: (formData.camera_type === 'Webcam' || formData.camera_type === 'USB') ? 'online' : formData.status
         };
-        
-        await api.post('/cameras', cameraData);
+
+        const response = await api.post('/cameras', cameraData);
+        console.log('Add camera response', response.data);
         setToast({
           isOpen: true,
           type: 'success',
           title: 'Camera Added!',
           message: `Camera "${formData.name}" has been added successfully.`
         });
-        
-        // Start background recording if it's a webcam
-        if (formData.camera_type === 'Webcam' || formData.camera_type === 'USB') {
-          try {
-            const backgroundRecordingService = (await import('../services/backgroundRecording')).default;
-            await backgroundRecordingService.start();
-            console.log('✅ Background recording started after adding webcam');
-          } catch (error) {
-            console.warn('⚠️ Could not start recording:', error);
-          }
-        }
       }
-      
+
       setShowAddModal(false);
       setEditingCamera(null);
       resetForm();
       await fetchCameras();
-      
+
       // Reload page to refresh all components
       setTimeout(() => {
         window.location.reload();
       }, 1000);
     } catch (error) {
       console.error('Error saving camera:', error);
+      // show server message or generic
+      const msg = error.response?.data?.message || error.message || 'An error occurred while saving the camera.';
       setToast({
         isOpen: true,
         type: 'error',
         title: 'Failed to Save Camera',
-        message: error.response?.data?.message || 'An error occurred while saving the camera.'
+        message: msg
       });
     }
   };

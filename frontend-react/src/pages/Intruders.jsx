@@ -1,68 +1,47 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Layout from '../components/Layout';
-import { Search, Filter, Eye, AlertTriangle } from 'lucide-react';
+import ConfirmModal from '../components/ConfirmModal';
+import { Search, Filter, Eye, AlertTriangle, Trash2, Clock, Camera, Film, ChevronDown, ChevronUp } from 'lucide-react';
+import api from '../services/api';
 
 const Intruders = () => {
-  const [intruders] = useState([
-    {
-      id: 1,
-      imageUrl: null,
-      firstSeen: '2025-10-05 14:30:25',
-      lastSeen: '2025-10-05 18:45:12',
-      appearances: 5,
-      threatLevel: 'critical',
-      status: 'active',
-      location: 'Front Entrance'
-    },
-    {
-      id: 2,
-      imageUrl: null,
-      firstSeen: '2025-10-04 09:15:30',
-      lastSeen: '2025-10-05 16:20:45',
-      appearances: 12,
-      threatLevel: 'high',
-      status: 'active',
-      location: 'Parking Lot'
-    },
-    {
-      id: 3,
-      imageUrl: null,
-      firstSeen: '2025-10-03 11:45:15',
-      lastSeen: '2025-10-03 12:10:30',
-      appearances: 2,
-      threatLevel: 'medium',
-      status: 'cleared',
-      location: 'Back Door'
-    },
-    {
-      id: 4,
-      imageUrl: null,
-      firstSeen: '2025-10-02 22:30:00',
-      lastSeen: '2025-10-02 23:15:45',
-      appearances: 4,
-      threatLevel: 'low',
-      status: 'identified',
-      location: 'Reception'
-    },
-  ]);
+  const [intruders, setIntruders] = useState([]);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [expandedId, setExpandedId] = useState(null);
+  const [deleteModal, setDeleteModal] = useState({ isOpen: false, id: null });
 
-  const getThreatLevelColor = (level) => {
-    switch (level) {
-      case 'critical': return 'badge-danger';
-      case 'high': return 'badge-warning';
-      case 'medium': return 'bg-orange-100 text-orange-800';
-      case 'low': return 'badge-info';
-      default: return 'bg-gray-100 text-gray-800';
-    }
+  const loadIntruders = (params = {}) => {
+    const query = new URLSearchParams();
+    if (params.status) query.append('status', params.status);
+    if (params.dateFrom) query.append('dateFrom', params.dateFrom);
+    if (params.dateTo) query.append('dateTo', params.dateTo);
+    api.get(`/intruders?${query.toString()}`)
+      .then(res => setIntruders(res.data))
+      .catch(err => console.error('error loading intruders', err));
   };
 
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'active': return 'badge-danger';
-      case 'identified': return 'badge-info';
-      case 'cleared': return 'badge-success';
-      default: return 'bg-gray-100 text-gray-800';
-    }
+  useEffect(() => {
+    loadIntruders();
+  }, []);
+
+  const applyFilters = () => {
+    loadIntruders({ status: statusFilter, dateFrom, dateTo });
+  };
+
+  const markIdentified = (id) => {
+    api.patch(`/intruders/${id}`, { status: 'identified' })
+      .then(() => {
+        setIntruders(prev => prev.map(i => i.id === id ? { ...i, status: 'identified' } : i));
+      })
+      .catch(err => console.error('update failed', err));
+  };
+
+  const deleteIntruder = (id) => {
+    api.delete(`/intruders/${id}`)
+      .then(() => setIntruders(prev => prev.filter(i => i.id !== id)))
+      .catch(err => console.error('delete failed', err));
   };
 
   return (
@@ -71,28 +50,24 @@ const Intruders = () => {
         {/* Filters */}
         <div className="card">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search intruders..."
-                className="input pl-10"
-              />
-            </div>
-            <select className="input">
-              <option value="">All Threat Levels</option>
-              <option value="critical">Critical</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-            </select>
-            <select className="input">
+            <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
               <option value="">All Status</option>
               <option value="active">Active</option>
               <option value="identified">Identified</option>
-              <option value="cleared">Cleared</option>
             </select>
-            <button className="btn btn-primary">
+            <input
+              type="date"
+              className="input"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+            />
+            <input
+              type="date"
+              className="input"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+            />
+            <button className="btn btn-primary" onClick={applyFilters}>
               <Filter className="w-4 h-4 mr-2 inline" />
               Apply Filters
             </button>
@@ -100,22 +75,18 @@ const Intruders = () => {
         </div>
 
         {/* Statistics */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="card">
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Intruders</p>
-            <p className="text-3xl font-bold text-gray-800 dark:text-white">12</p>
+            <p className="text-3xl font-bold text-gray-800 dark:text-white">{intruders.length}</p>
           </div>
           <div className="card">
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Active Cases</p>
-            <p className="text-3xl font-bold text-red-600">5</p>
+            <p className="text-3xl font-bold text-red-600">{intruders.filter(i => i.status === 'active').length}</p>
           </div>
           <div className="card">
             <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Identified</p>
-            <p className="text-3xl font-bold text-blue-600">3</p>
-          </div>
-          <div className="card">
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Cleared</p>
-            <p className="text-3xl font-bold text-green-600">4</p>
+            <p className="text-3xl font-bold text-blue-600">{intruders.filter(i => i.status === 'identified').length}</p>
           </div>
         </div>
 
@@ -123,95 +94,141 @@ const Intruders = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
           {intruders.map((intruder) => (
             <div key={intruder.id} className="card p-0 overflow-hidden">
-              {/* Image Placeholder */}
+              {/* Image */}
               <div className="aspect-square bg-gray-200 dark:bg-gray-700 flex items-center justify-center relative">
-                <Eye className="w-16 h-16 text-gray-400" />
+                {intruder.imageUrl ? (
+                  <img src={`http://localhost:5000${intruder.imageUrl}`} alt="Intruder" className="w-full h-full object-cover" />
+                ) : (
+                  <Eye className="w-16 h-16 text-gray-400" />
+                )}
                 
-                {/* Threat Level Badge */}
-                <div className="absolute top-3 right-3">
-                  <span className={`badge ${getThreatLevelColor(intruder.threatLevel)}`}>
-                    {intruder.threatLevel}
-                  </span>
-                </div>
-
                 {/* Status Badge */}
                 <div className="absolute top-3 left-3">
-                  <span className={`badge ${getStatusColor(intruder.status)}`}>
+                  <span className={`badge ${intruder.status === 'active' ? 'badge-danger' : 'badge-info'}`}>
                     {intruder.status}
                   </span>
                 </div>
 
-                {/* Alert Icon for Critical */}
-                {intruder.threatLevel === 'critical' && (
-                  <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
-                    <AlertTriangle className="w-12 h-12 text-red-600 animate-pulse" />
-                  </div>
-                )}
+                {/* Delete Button */}
+                <button
+                  onClick={() => setDeleteModal({ isOpen: true, id: intruder.id })}
+                  className="absolute top-3 right-3 bg-red-500 hover:bg-red-600 text-white rounded-full p-1.5 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {/* Intruder Info */}
               <div className="p-4">
-                <h3 className="font-semibold text-gray-800 dark:text-white mb-2">
+                <h3 className="font-semibold text-gray-800 dark:text-white mb-1">
                   Intruder #{intruder.id}
                 </h3>
-                
-                <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
-                  <div className="flex justify-between">
-                    <span>First Seen:</span>
-                    <span className="font-medium">{intruder.firstSeen.split(' ')[0]}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Last Seen:</span>
-                    <span className="font-medium">{intruder.lastSeen.split(' ')[0]}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Appearances:</span>
-                    <span className="font-medium">{intruder.appearances}x</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Location:</span>
-                    <span className="font-medium">{intruder.location}</span>
-                  </div>
+                <div className="flex items-center text-sm text-gray-600 dark:text-gray-400 mb-1">
+                  <Camera className="w-3.5 h-3.5 mr-1 flex-shrink-0" />
+                  {intruder.camera}
                 </div>
+                <div className="flex items-center text-xs text-gray-500 dark:text-gray-500 mt-1">
+                  <Clock className="w-3 h-3 mr-1 flex-shrink-0" />
+                  First seen: {intruder.firstSeen}
+                </div>
+                {intruder.lastSeen && intruder.lastSeen !== intruder.firstSeen && (
+                  <div className="flex items-center text-xs text-gray-500 dark:text-gray-500 mt-0.5">
+                    <Clock className="w-3 h-3 mr-1 flex-shrink-0" />
+                    Last seen: {intruder.lastSeen}
+                  </div>
+                )}
+                {intruder.appearances > 1 && (
+                  <p className="text-xs text-orange-500 mt-1 font-medium">Seen {intruder.appearances} times</p>
+                )}
 
-                {/* Actions */}
-                <div className="mt-4 flex space-x-2">
-                  <button className="flex-1 btn btn-primary text-xs py-2">
-                    View Details
+                {/* Expand/Collapse for appearance details */}
+                {intruder.appearancesList && intruder.appearancesList.length > 0 && (
+                  <button
+                    onClick={() => setExpandedId(expandedId === intruder.id ? null : intruder.id)}
+                    className="mt-2 flex items-center text-xs text-blue-500 hover:text-blue-400 transition-colors w-full"
+                  >
+                    {expandedId === intruder.id ? <ChevronUp className="w-3.5 h-3.5 mr-1" /> : <ChevronDown className="w-3.5 h-3.5 mr-1" />}
+                    {expandedId === intruder.id ? 'Hide' : 'Show'} capture details ({intruder.appearancesList.length})
                   </button>
-                  <button className="flex-1 btn bg-orange-500 hover:bg-orange-600 text-white text-xs py-2">
-                    Report
+                )}
+
+                {/* Expanded appearance timestamps */}
+                {expandedId === intruder.id && (
+                  <div className="mt-2 space-y-2 border-t border-gray-700 pt-2">
+                    {/* Appearance timeline */}
+                    <div>
+                      <p className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wide">Capture Timeline</p>
+                      <div className="max-h-32 overflow-y-auto space-y-1">
+                        {intruder.appearancesList.map((ap, idx) => (
+                          <div key={ap.id || idx} className="flex items-center justify-between text-xs bg-gray-800/50 rounded px-2 py-1">
+                            <div className="flex items-center text-gray-300">
+                              <Clock className="w-3 h-3 mr-1.5 text-orange-400 flex-shrink-0" />
+                              {ap.timestamp}
+                            </div>
+                            <span className="text-gray-500 text-[10px]">{ap.camera}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Recording segments */}
+                    {intruder.recordingSegments && intruder.recordingSegments.length > 0 && (
+                      <div>
+                        <p className="text-xs font-semibold text-gray-400 mb-1 uppercase tracking-wide">In Recording Segments</p>
+                        <div className="max-h-32 overflow-y-auto space-y-1">
+                          {intruder.recordingSegments.map((seg, idx) => (
+                            <div key={idx} className="text-xs bg-indigo-900/30 border border-indigo-700/40 rounded px-2 py-1.5">
+                              <div className="flex items-center text-indigo-300 mb-0.5">
+                                <Film className="w-3 h-3 mr-1.5 flex-shrink-0" />
+                                {seg.camera}
+                              </div>
+                              <div className="text-gray-400 pl-4.5">
+                                {seg.startTime} &rarr; {seg.endTime}
+                              </div>
+                              <div className="text-orange-400 pl-4.5 text-[10px]">
+                                Detected at {seg.detectedAt}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* For active intruders show identify button */}
+                {intruder.status === 'active' && (
+                  <button
+                    className="mt-3 btn btn-success w-full"
+                    onClick={() => markIdentified(intruder.id)}
+                  >
+                    Mark Identified
                   </button>
-                </div>
+                )}
               </div>
             </div>
           ))}
         </div>
 
-        {/* Pagination */}
-        <div className="card">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Showing 1 to 4 of 12 entries
-            </p>
-            <div className="flex space-x-2">
-              <button className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                Previous
-              </button>
-              <button className="px-3 py-1 bg-primary text-white rounded">1</button>
-              <button className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                2
-              </button>
-              <button className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                3
-              </button>
-              <button className="px-3 py-1 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-                Next
-              </button>
-            </div>
+        {intruders.length === 0 && (
+          <div className="card text-center py-12">
+            <Eye className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+            <p className="text-gray-500 dark:text-gray-400 text-lg">No intruders detected yet</p>
+            <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">Unknown faces will appear here automatically</p>
           </div>
-        </div>
+        )}
       </div>
+
+      <ConfirmModal
+        isOpen={deleteModal.isOpen}
+        onClose={() => setDeleteModal({ isOpen: false, id: null })}
+        onConfirm={() => deleteIntruder(deleteModal.id)}
+        title="Delete Intruder?"
+        message="Are you sure you want to delete this intruder record? This action cannot be undone."
+        confirmText="Delete"
+        type="danger"
+      />
     </Layout>
   );
 };

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import { Video, Trash2, Download, Play, AlertTriangle, HardDrive, Pause, SkipForward, SkipBack, Maximize2 } from 'lucide-react';
 import api from '../services/api';
-import backgroundRecordingService from '../services/backgroundRecording';
+
 import ConfirmModal from '../components/ConfirmModal';
 import Toast from '../components/Toast';
 
@@ -18,6 +18,7 @@ const Recordings = () => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [segmentDuration, setSegmentDuration] = useState(10); // seconds from settings, default 10
   const videoRef = useRef(null);
 
   // Modal states
@@ -27,6 +28,9 @@ const Recordings = () => {
 
   useEffect(() => {
     fetchRecordings();
+    // poll every 5 seconds while component is mounted
+    const timer = setInterval(fetchRecordings, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   const fetchRecordings = async () => {
@@ -44,6 +48,9 @@ const Recordings = () => {
       setRecordingsByCamera(response.data.recordingsByCamera || {});
       setCameras(response.data.cameras || []);
       setTotalSize(response.data.totalSizeMB);
+      // always set (default or from backend)
+      const sd = parseInt(response.data.segmentDuration,10);
+      setSegmentDuration(isNaN(sd) || sd <= 0 ? 10 : sd);
     } catch (error) {
       console.error('Error fetching recordings:', error);
     } finally {
@@ -157,13 +164,6 @@ const Recordings = () => {
         return;
       }
       
-      // Stop recording to release file locks
-      const wasRecording = backgroundRecordingService.isRecording;
-      if (wasRecording) {
-        console.log('Pausing recording...');
-        await backgroundRecordingService.pauseRecording();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
       
       console.log('Calling API to delete all recordings...');
       const response = await api.delete('/recordings/format', {
@@ -194,12 +194,6 @@ const Recordings = () => {
       // Refresh list
       await fetchRecordings();
       
-      // Resume recording if it was active
-      if (wasRecording) {
-        console.log('Resuming recording...');
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await backgroundRecordingService.resumeRecording();
-      }
       
     } catch (error) {
       console.error('Error formatting recordings:', error);
@@ -363,9 +357,7 @@ const Recordings = () => {
         <div className="flex justify-between items-center mb-6">
           <div>
             <h1 className="text-2xl font-bold text-gray-800 dark:text-white">Video Recordings</h1>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              Recorded live camera feeds (2-minute segments with continuous playback)
-            </p>
+            {/* description text removed per user request */}
           </div>
           <button
             onClick={refreshRecordings}
@@ -417,7 +409,7 @@ const Recordings = () => {
                   className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 mt-1 cursor-pointer hover:underline transition-colors text-left"
                   title="Click to open folder in Windows Explorer"
                 >
-                  C:\Users\user\Videos\recordings
+                  {`C:\\Users\\user\\Videos\\recordings\\${localStorage.getItem('username') || ''}`}
                 </button>
               </div>
               <div className="p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">
@@ -600,11 +592,7 @@ const Recordings = () => {
             <div className="flex items-center space-x-2 overflow-x-auto">
               <button
                 onClick={() => setSelectedCamera('all')}
-                className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                  selectedCamera === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                }`}
+                className={`btn ${selectedCamera==='all'? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'} whitespace-nowrap`}
               >
                 All Cameras ({recordings.length})
               </button>
@@ -612,11 +600,7 @@ const Recordings = () => {
                 <button
                   key={camera.id}
                   onClick={() => setSelectedCamera(camera.id)}
-                  className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
-                    selectedCamera === camera.id
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'
-                  }`}
+                  className={`btn ${selectedCamera===camera.id? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'} whitespace-nowrap`}
                 >
                   {camera.name} ({recordingsByCamera[camera.id]?.count || 0})
                 </button>
@@ -633,19 +617,22 @@ const Recordings = () => {
           </div>
         ) : (selectedCamera === 'all' ? recordings : (recordingsByCamera[selectedCamera]?.recordings || [])).length > 0 ? (
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
-            <table className="w-full">
+            <table className="w-full table-fixed">
               <thead className="bg-gray-50 dark:bg-gray-700">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  <th className="w-2/12 px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Camera
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  <th className="w-3/12 px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Filename
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                    Recorded At
+                  <th className="w-2/12 px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                    Start
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                  <th className="w-2/12 px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                    End
+                  </th>
+                  <th className="w-1/12 px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                     Size
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -674,6 +661,13 @@ const Recordings = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
                       {recording.created}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
+                      {segmentDuration ? (() => {
+                        const d = new Date(new Date(recording.created).getTime() + segmentDuration * 1000);
+                        const pad = n => String(n).padStart(2, '0');
+                        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+                      })() : '...'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
                       {recording.sizeMB} MB

@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import Layout from '../components/Layout';
 import WebcamCapture from '../components/WebcamCapture';
 import RTSPCameraFeed from '../components/RTSPCameraFeed';
+import ConfirmModal from '../components/ConfirmModal';
+import { useDetection } from '../contexts/DetectionContext';
 import { 
   Video, 
   VideoOff, 
@@ -17,12 +19,14 @@ import {
   Maximize2,
   Grid3x3,
   Grid2x2,
-  Camera
+  Camera,
+  Trash2
 } from 'lucide-react';
 import api from '../services/api';
-import backgroundRecordingService from '../services/backgroundRecording';
+
 
 const LiveMonitoring = () => {
+  const { overlays, detectionDims } = useDetection() || { overlays: [], detectionDims: { current: { width: 640, height: 480 } } };
   const [isDetectionEnabled, setIsDetectionEnabled] = useState(true);
   const [capturedFrames, setCapturedFrames] = useState([]);
   const [detections, setDetections] = useState([]);
@@ -33,34 +37,25 @@ const LiveMonitoring = () => {
   const [cameras, setCameras] = useState([]);
   const [viewMode, setViewMode] = useState('grid'); // 'grid' or 'single'
   const [selectedCamera, setSelectedCamera] = useState(null);
-  const [cameraRecordingStatus, setCameraRecordingStatus] = useState({}); // {camera_id: boolean}
-  
-  const [recordingStatus, setRecordingStatus] = useState({
-    isRecording: false,
-    recordingTime: 0
-  });
-
+  // Removed all recording state (no start/stop/timer)
   // Create ref for WebcamCapture component
   const webcamRef = useRef(null);
-  
-  // Ref to track auto-restart timers
-  const recordingTimers = useRef({});
 
   // Get username
   const username = localStorage.getItem('username') || sessionStorage.getItem('username');
   
-  // Cleanup timers on unmount
-  useEffect(() => {
-    return () => {
-      Object.values(recordingTimers.current).forEach(timer => clearTimeout(timer));
-    };
-  }, []);
 
-  // Fetch all cameras on mount
+  // Fetch all cameras on mount, and poll detections/captures every 5s
+  // (background detection creates intruders even when not on this page)
   useEffect(() => {
     fetchCameras();
     fetchDetections();
     fetchSavedCaptures();
+    const interval = setInterval(() => {
+      fetchDetections();
+      fetchSavedCaptures();
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   // Fetch cameras
@@ -96,211 +91,9 @@ const LiveMonitoring = () => {
     return () => clearInterval(interval);
   }, [username]);
 
-  // Auto-start server-side recording on mount
-  useEffect(() => {
-    const initRecording = async () => {
-      try {
-        // Wait for cameras to load first
-        if (cameras.length === 0) {
-          console.log('⏳ Waiting for cameras to load...');
-          return;
-        }
-        
-        console.log('🎬 Auto-starting server-side recording...');
-        await handleStartRecording();
-        console.log('✅ Auto-started server-side recording');
-      } catch (error) {
-        console.error('❌ Failed to auto-start recording:', error);
-      }
-    };
-    
-    // Only auto-start if cameras are loaded and not already recording
-    if (cameras.length > 0 && !recordingStatus.isRecording) {
-      initRecording();
-    }
-  }, [cameras]);
 
-  // Update recording time counter for active recordings
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Check if any cameras are recording
-      const hasActiveRecording = Object.values(cameraRecordingStatus).some(status => status === true);
-      
-      if (hasActiveRecording) {
-        setRecordingStatus(prev => ({
-          isRecording: true,
-          recordingTime: prev.recordingTime + 1
-        }));
-      } else {
-        // No active recordings
-        setRecordingStatus({
-          isRecording: false,
-          recordingTime: 0
-        });
-      }
-    }, 1000);
 
-    return () => clearInterval(interval);
-  }, [cameraRecordingStatus]);
 
-  // Handle visibility change - prevent auto-start if manually stopped
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        // Tab is now visible
-        console.log('Tab visible - checking camera state');
-        
-        // Only auto-start camera if recording is active AND camera was not manually stopped
-        if (webcamRef.current && recordingStatus.isRecording && !webcamRef.current.manuallyStopped) {
-          console.log('Recording is active and camera was not manually stopped - camera will auto-start');
-        } else if (webcamRef.current && webcamRef.current.manuallyStopped) {
-          console.log('Camera was manually stopped - will NOT auto-start');
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [recordingStatus.isRecording]);
-
-  // Format recording time
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Handle start recording - Start recording for ALL cameras
-  const handleStartRecording = async () => {
-    try {
-      console.log('🎬 handleStartRecording called');
-      console.log('📍 Total cameras:', cameras.length);
-      console.log('📍 All cameras:', cameras);
-      
-      if (cameras.length === 0) {
-        console.warn('⚠️ No cameras available to record');
-        return;
-      }
-      
-      console.log(`🎬 Starting server-side FFmpeg recording for ${cameras.length} camera(s)...`);
-      
-      // Start server-side FFmpeg recording for each camera
-      // Webcams: Master-slave system (device_index 0)
-      // IP Cameras: Record independently from RTSP stream
-      for (let i = 0; i < cameras.length; i++) {
-        const camera = cameras[i];
-        const deviceIndex = (camera.camera_type === 'USB' || camera.camera_type === 'Webcam') ? 0 : i;
-        console.log(`📍 Starting server-side recording for camera ${camera.id} (${camera.name}, type: ${camera.camera_type})...`);
-        await startCameraRecording(camera, deviceIndex);
-      }
-      
-      console.log('✅ Recording started for all cameras');
-    } catch (error) {
-      console.error('❌ Failed to start recording:', error);
-      console.error('❌ Error details:', error.message, error.stack);
-    }
-  };
-
-  // Handle stop recording - Stop recording for ALL cameras
-  const handleStopRecording = async () => {
-    try {
-      console.log('⏹️ Stopping all server-side camera recordings...');
-      
-      console.log(`📍 Stopping ${cameras.length} cameras...`);
-      
-      // Stop all server-side FFmpeg recordings (both webcam and IP cameras)
-      for (const camera of cameras) {
-        console.log(`📍 Stopping camera ${camera.id} (${camera.name}, type: ${camera.camera_type})...`);
-        await stopCameraRecording(camera);
-      }
-      
-      // Update recording status to stopped
-      setRecordingStatus({
-        isRecording: false,
-        recordingTime: 0
-      });
-      
-      console.log('✅ Recording stopped for all cameras');
-    } catch (error) {
-      console.error('❌ Failed to stop recording:', error);
-      console.error('❌ Error details:', error.message, error.stack);
-    }
-  };
-
-  // Start server-side recording for specific camera
-  const startCameraRecording = async (camera, deviceIndex = 0) => {
-    try {
-      const response = await api.post(`/cameras/${camera.id}/recording/start`, {
-        username,
-        device_index: deviceIndex,
-        duration: 60 // 60 seconds per segment
-      });
-      
-      if (response.data.success) {
-        setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: true }));
-        
-        // Update main recording status
-        setRecordingStatus({
-          isRecording: true,
-          recordingTime: 0
-        });
-        
-        console.log(`✅ Started recording for camera: ${camera.name} (device index: ${deviceIndex})`);
-        
-        // Auto-restart recording after duration
-        const timer = setTimeout(() => {
-          // Check if still recording before restarting
-          setCameraRecordingStatus(prev => {
-            if (prev[camera.id]) {
-              startCameraRecording(camera, deviceIndex);
-            }
-            return prev;
-          });
-        }, 60000);
-        
-        recordingTimers.current[camera.id] = timer;
-      }
-    } catch (error) {
-      console.error(`❌ Failed to start recording for camera ${camera.name}:`, error);
-    }
-  };
-
-  // Stop server-side recording for specific camera
-  const stopCameraRecording = async (camera) => {
-    try {
-      console.log(`📍 stopCameraRecording called for camera ${camera.id}`);
-      
-      // Clear auto-restart timer
-      if (recordingTimers.current[camera.id]) {
-        clearTimeout(recordingTimers.current[camera.id]);
-        delete recordingTimers.current[camera.id];
-        console.log(`✅ Cleared timer for camera ${camera.id}`);
-      }
-      
-      // Update status immediately
-      setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: false }));
-      
-      await api.post(`/cameras/${camera.id}/recording/stop`, {
-        username
-      });
-      
-      setCameraRecordingStatus(prev => ({ ...prev, [camera.id]: false }));
-      console.log(`✅ Stopped recording for camera: ${camera.name}`);
-    } catch (error) {
-      console.error(`❌ Failed to stop recording for camera ${camera.name}:`, error);
-    }
-  };
-
-  // Toggle recording for specific camera
-  const toggleCameraRecording = async (camera) => {
-    if (cameraRecordingStatus[camera.id]) {
-      await stopCameraRecording(camera);
-    } else {
-      await startCameraRecording(camera);
-    }
-  };
 
   const fetchDetections = async () => {
     try {
@@ -323,6 +116,28 @@ const LiveMonitoring = () => {
     }
   };
 
+  const deleteCapture = async (captureId) => {
+    try {
+      await api.delete(`/captures/delete/${captureId}`);
+      setSavedCaptures(prev => prev.filter(c => c.id !== captureId));
+      setTotalCaptures(prev => prev - 1);
+    } catch (error) {
+      console.error('Error deleting capture:', error);
+    }
+  };
+
+  const [showDeleteAllCapturesModal, setShowDeleteAllCapturesModal] = useState(false);
+
+  const deleteAllCaptures = async () => {
+    try {
+      await api.delete('/captures/delete-all');
+      setSavedCaptures([]);
+      setTotalCaptures(0);
+    } catch (error) {
+      console.error('Error deleting all captures:', error);
+    }
+  };
+
   const handleCapture = async (blob, dataUrl) => {
     const frame = {
       id: Date.now(),
@@ -330,27 +145,26 @@ const LiveMonitoring = () => {
       dataUrl: dataUrl
     };
     setCapturedFrames(prev => [frame, ...prev].slice(0, 10)); // Keep last 10 frames
-    console.log('Frame captured:', frame);
     
-    // Send frame to backend for face detection
-    if (isDetectionEnabled && cameraId) {
+    // Manual captures still trigger detection for immediate feedback
+    if (isDetectionEnabled) {
       try {
-        const response = await api.post('/detection/process-frame', {
+        const camId = cameraId || (cameras.length > 0 ? cameras[0].id : 1);
+        await api.post('/detection/process-frame', {
           image: dataUrl,
-          cameraId: cameraId
+          cameraId: camId
         });
-        
-        if (response.data.success) {
-          console.log('Frame processed:', response.data);
-          // Refresh detections and captures
-          fetchDetections();
-          fetchSavedCaptures();
-        }
+        // Refresh detections and captures
+        fetchDetections();
+        fetchSavedCaptures();
       } catch (error) {
         console.error('Error processing frame:', error);
       }
     }
   };
+
+  // Background detection runs in DetectionContext — no local auto-capture loop needed.
+  // Overlays come directly from the context and are always up-to-date.
 
   const handleStreamingChange = (isStreaming) => {
     setIsCameraStreaming(isStreaming);
@@ -396,46 +210,6 @@ const LiveMonitoring = () => {
           </div>
         </div>
 
-        {/* Background Recording Status with Manual Controls */}
-        <div className={`${recordingStatus.isRecording ? 'bg-red-500' : 'bg-gray-600'} text-white px-6 py-4 rounded-lg mb-6`}>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              {recordingStatus.isRecording && (
-                <div className="w-3 h-3 bg-white rounded-full animate-ping"></div>
-              )}
-              <Video className="w-5 h-5" />
-              <span className="font-semibold">
-                {recordingStatus.isRecording ? 'Background Recording Active' : 'Recording Stopped'}
-              </span>
-              {recordingStatus.isRecording && (
-                <span className="text-sm">
-                  Recording Time: {formatTime(recordingStatus.recordingTime)}
-                </span>
-              )}
-            </div>
-            
-            {/* Recording Control Buttons */}
-            <div className="flex items-center space-x-3">
-              {recordingStatus.isRecording ? (
-                <button
-                  onClick={handleStopRecording}
-                  className="flex items-center space-x-2 bg-white text-red-600 px-4 py-2 rounded-lg hover:bg-gray-100 transition-all font-semibold"
-                >
-                  <Square className="w-4 h-4" />
-                  <span>Stop Recording</span>
-                </button>
-              ) : (
-                <button
-                  onClick={handleStartRecording}
-                  className="flex items-center space-x-2 bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-all font-semibold"
-                >
-                  <Play className="w-4 h-4" />
-                  <span>Start Recording</span>
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
 
         {/* Camera Feeds */}
         {cameras.length === 0 ? (
@@ -486,6 +260,10 @@ const LiveMonitoring = () => {
                         ref={index === 0 ? webcamRef : null}
                         onCapture={handleCapture} 
                         onStreamingChange={handleStreamingChange}
+                        overlays={overlays}
+                        detectionDims={detectionDims?.current}
+                        cameraId={camera.id}
+                        username={username}
                       />
                     </div>
                   ) : (
@@ -713,9 +491,18 @@ const LiveMonitoring = () => {
                 <ImageIcon className="w-5 h-5 mr-2" />
                 Saved Captures
               </h2>
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Total: {totalCaptures}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Total: {totalCaptures}
+                </span>
+                <button
+                  onClick={() => setShowDeleteAllCapturesModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete All
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {savedCaptures.map((capture) => (
@@ -725,6 +512,14 @@ const LiveMonitoring = () => {
                     alt={`Capture at ${capture.timestamp}`}
                     className="w-full h-48 object-cover hover:scale-105 transition-transform cursor-pointer"
                   />
+                  {/* Delete button */}
+                  <button
+                    onClick={() => deleteCapture(capture.id)}
+                    className="absolute top-2 right-2 bg-red-600/80 hover:bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Delete capture"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                   <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                     <div className="absolute bottom-0 left-0 right-0 p-3 text-white">
                       <div className="flex items-center text-xs mb-1">
@@ -756,6 +551,16 @@ const LiveMonitoring = () => {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={showDeleteAllCapturesModal}
+        onClose={() => setShowDeleteAllCapturesModal(false)}
+        onConfirm={deleteAllCaptures}
+        title="Delete All Captures?"
+        message="Are you sure you want to delete all saved captures? This action cannot be undone."
+        confirmText="Delete"
+        type="danger"
+      />
     </Layout>
   );
 };

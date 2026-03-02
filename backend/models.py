@@ -17,7 +17,7 @@ class User(db.Model):
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), default='user')  # admin, user, viewer
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     last_login = db.Column(db.DateTime)
     
     def set_password(self, password):
@@ -40,8 +40,8 @@ class AuthorizedPerson(db.Model):
     email = db.Column(db.String(120))
     is_active = db.Column(db.Boolean, default=True)
     photo_path = db.Column(db.String(255))  # Path to photo file
-    registered_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
+    registered_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, onupdate=datetime.now)
     
     # Relationships
     face_encodings = db.relationship('FaceEncoding', backref='authorized_person', lazy=True, cascade='all, delete-orphan')
@@ -55,7 +55,7 @@ class FaceEncoding(db.Model):
     person_id = db.Column(db.Integer, db.ForeignKey('authorized_persons.id'), nullable=False)
     encoding = db.Column(db.LargeBinary, nullable=False)  # Stored as binary (numpy array)
     encoding_model = db.Column(db.String(50), default='FaceNet')  # FaceNet, VGGFace, etc.
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
 
 class Camera(db.Model):
@@ -73,7 +73,7 @@ class Camera(db.Model):
     fps = db.Column(db.Integer, default=30)
     resolution = db.Column(db.String(20), default='1920x1080')
     username = db.Column(db.String(80), nullable=False)  # User who owns this camera
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
     
     # Relationships
     detections = db.relationship('DetectionEvent', backref='camera', lazy=True, cascade='all, delete-orphan')
@@ -89,7 +89,7 @@ class DetectionEvent(db.Model):
     detection_type = db.Column(db.String(20), nullable=False)  # face, person, object, animal
     is_authorized = db.Column(db.Boolean, default=False)
     confidence = db.Column(db.Float)  # Detection confidence score
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now, index=True)
     image_path = db.Column(db.String(255))  # Path to captured image
     bounding_box = db.Column(db.JSON)  # {x, y, width, height}
     
@@ -102,9 +102,10 @@ class Intruder(db.Model):
     __tablename__ = 'intruders'
     
     id = db.Column(db.Integer, primary_key=True)
-    first_seen = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen = db.Column(db.DateTime, default=datetime.now)
+    last_seen = db.Column(db.DateTime, default=datetime.now)
     appearance_count = db.Column(db.Integer, default=1)
+    status = db.Column(db.String(20), default='active')  # active, identified
     threat_level = db.Column(db.String(20), default='low')  # low, medium, high
     notes = db.Column(db.Text)
     
@@ -121,7 +122,7 @@ class IntruderAppearance(db.Model):
     intruder_id = db.Column(db.Integer, db.ForeignKey('intruders.id'), nullable=False)
     detection_event_id = db.Column(db.Integer, db.ForeignKey('detection_events.id'))
     camera_id = db.Column(db.Integer, db.ForeignKey('cameras.id', ondelete='SET NULL'))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
     image_path = db.Column(db.String(255))
     confidence = db.Column(db.Float)
 
@@ -134,7 +135,7 @@ class IntruderFaceEncoding(db.Model):
     intruder_id = db.Column(db.Integer, db.ForeignKey('intruders.id'), nullable=False)
     encoding = db.Column(db.LargeBinary, nullable=False)
     encoding_model = db.Column(db.String(50), default='FaceNet')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.now)
 
 
 class Alert(db.Model):
@@ -149,7 +150,7 @@ class Alert(db.Model):
     is_acknowledged = db.Column(db.Boolean, default=False)
     acknowledged_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     acknowledged_at = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.now, index=True)
 
 
 class SystemLog(db.Model):
@@ -163,7 +164,7 @@ class SystemLog(db.Model):
     entity_id = db.Column(db.Integer)
     description = db.Column(db.Text)
     ip_address = db.Column(db.String(45))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    timestamp = db.Column(db.DateTime, default=datetime.now, index=True)
 
 
 class SystemSettings(db.Model):
@@ -174,4 +175,4 @@ class SystemSettings(db.Model):
     setting_key = db.Column(db.String(100), unique=True, nullable=False)
     setting_value = db.Column(db.Text)
     description = db.Column(db.String(255))
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)

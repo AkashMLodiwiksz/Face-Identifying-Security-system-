@@ -1,0 +1,171 @@
+@startuml Face_Recognition_Security_System_Database
+
+hide circle
+
+' ==================== ENTITY DEFINITIONS ====================
+
+entity "users" as users {
+  * **id** : INTEGER <<PK>>
+  --
+  * username : VARCHAR(50) <<UNIQUE>>
+  * email : VARCHAR(120) <<UNIQUE>>
+  * password_hash : VARCHAR(255)
+  role : VARCHAR(20) [admin/user/viewer]
+  is_active : BOOLEAN
+  created_at : DATETIME
+  last_login : DATETIME
+}
+
+entity "authorized_persons" as authorized_persons {
+  * **id** : INTEGER <<PK>>
+  --
+  * name : VARCHAR(100)
+  employee_id : VARCHAR(50) <<UNIQUE>>
+  department : VARCHAR(100)
+  designation : VARCHAR(100)
+  phone : VARCHAR(20)
+  email : VARCHAR(120)
+  is_active : BOOLEAN
+  photo_path : VARCHAR(255)
+  registered_at : DATETIME
+  updated_at : DATETIME
+}
+
+entity "face_encodings" as face_encodings {
+  * **id** : INTEGER <<PK>>
+  --
+  * person_id : INTEGER <<FK>>
+  * encoding : BLOB (128-dimensional vector)
+  encoding_model : VARCHAR(50)
+  created_at : DATETIME
+}
+
+entity "cameras" as cameras {
+  * **id** : INTEGER <<PK>>
+  --
+  * name : VARCHAR(100)
+  * username : VARCHAR(80) <<FK>>
+  location : VARCHAR(200)
+  rtsp_url : VARCHAR(500)
+  camera_type : VARCHAR(20) [IP/USB/PTZ/CCTV]
+  status : VARCHAR(20) [online/offline]
+  is_active : BOOLEAN
+  is_ptz : BOOLEAN
+  fps : INTEGER
+  resolution : VARCHAR(20)
+  created_at : DATETIME
+}
+
+entity "detection_events" as detection_events {
+  * **id** : INTEGER <<PK>>
+  --
+  * camera_id : INTEGER <<FK>>
+  person_id : INTEGER <<FK>>
+  * detection_type : VARCHAR(20)
+  is_authorized : BOOLEAN
+  confidence : FLOAT
+  timestamp : DATETIME <<INDEX>>
+  image_path : VARCHAR(255)
+  bounding_box : JSON {x, y, width, height}
+}
+
+entity "intruders" as intruders {
+  * **id** : INTEGER <<PK>>
+  --
+  first_seen : DATETIME
+  last_seen : DATETIME
+  appearance_count : INTEGER
+  threat_level : VARCHAR(20) [low/medium/high]
+  notes : TEXT
+}
+
+entity "intruder_appearances" as intruder_appearances {
+  * **id** : INTEGER <<PK>>
+  --
+  * intruder_id : INTEGER <<FK>>
+  detection_event_id : INTEGER <<FK>>
+  camera_id : INTEGER <<FK>>
+  timestamp : DATETIME
+  image_path : VARCHAR(255)
+  confidence : FLOAT
+}
+
+entity "intruder_face_encodings" as intruder_face_encodings {
+  * **id** : INTEGER <<PK>>
+  --
+  * intruder_id : INTEGER <<FK>>
+  * encoding : BLOB (128-dimensional vector)
+  encoding_model : VARCHAR(50)
+  created_at : DATETIME
+}
+
+entity "alerts" as alerts {
+  * **id** : INTEGER <<PK>>
+  --
+  detection_event_id : INTEGER <<FK>>
+  * alert_type : VARCHAR(50)
+  severity : VARCHAR(20) [low/medium/high/critical]
+  message : TEXT
+  is_acknowledged : BOOLEAN
+  acknowledged_by : INTEGER <<FK>>
+  acknowledged_at : DATETIME
+  created_at : DATETIME <<INDEX>>
+}
+
+entity "system_logs" as system_logs {
+  * **id** : INTEGER <<PK>>
+  --
+  user_id : INTEGER <<FK>>
+  * action : VARCHAR(100)
+  entity_type : VARCHAR(50)
+  entity_id : INTEGER
+  description : TEXT
+  ip_address : VARCHAR(45)
+  timestamp : DATETIME <<INDEX>>
+}
+
+entity "system_settings" as system_settings {
+  * **id** : INTEGER <<PK>>
+  --
+  * setting_key : VARCHAR(100) <<UNIQUE>>
+  setting_value : TEXT
+  description : VARCHAR(255)
+  updated_at : DATETIME
+}
+
+' ==================== RELATIONSHIPS ====================
+
+' Authorized Persons <-> Face Encodings (1:N)
+authorized_persons ||--o{ face_encodings : "has"
+
+' Cameras <-> Detection Events (1:N) with CASCADE DELETE
+cameras ||--o{ detection_events : "captures"
+
+' Authorized Persons <-> Detection Events (1:N) - Optional
+authorized_persons ||--o{ detection_events : "detected_in"
+
+' Detection Events <-> Alerts (1:1) with CASCADE DELETE
+detection_events ||--|| alerts : "triggers"
+
+' Users <-> Alerts (1:N) - acknowledged_by
+users ||--o{ alerts : "acknowledges"
+
+' Users <-> System Logs (1:N)
+users ||--o{ system_logs : "performs"
+
+' Intruders <-> Intruder Appearances (1:N)
+intruders ||--o{ intruder_appearances : "has"
+
+' Intruders <-> Intruder Face Encodings (1:N)
+intruders ||--o{ intruder_face_encodings : "has_encodings"
+
+' Detection Events <-> Intruder Appearances (1:N)
+detection_events ||--o{ intruder_appearances : "related_to"
+
+' Cameras <-> Intruder Appearances (1:N) with SET NULL on delete
+cameras ||--o{ intruder_appearances : "captured_by"
+
+' Users <-> Cameras (1:N) - username as FK
+users ||--o{ cameras : "owns"
+
+@enduml
