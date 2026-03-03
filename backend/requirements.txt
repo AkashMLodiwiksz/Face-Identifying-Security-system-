@@ -29,3 +29,7 @@ python-dotenv==1.0.1
 requests==2.32.3
 psutil==6.1.0
 ffmpeg-python==0.2.0
+
+# AI Chatbot
+google-genai==1.65.0
+groq==1.0.0

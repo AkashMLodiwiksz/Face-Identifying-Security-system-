@@ -26,7 +26,7 @@ import api from '../services/api';
 
 
 const LiveMonitoring = () => {
-  const { overlays, detectionDims } = useDetection() || { overlays: [], detectionDims: { current: { width: 640, height: 480 } } };
+  const { overlays, detectionDims, objectOverlays, objectDims } = useDetection() || { overlays: [], detectionDims: { current: { width: 640, height: 480 } }, objectOverlays: [], objectDims: { current: { width: 640, height: 480 } } };
   const [isDetectionEnabled, setIsDetectionEnabled] = useState(true);
   const [capturedFrames, setCapturedFrames] = useState([]);
   const [detections, setDetections] = useState([]);
@@ -262,6 +262,8 @@ const LiveMonitoring = () => {
                         onStreamingChange={handleStreamingChange}
                         overlays={overlays}
                         detectionDims={detectionDims?.current}
+                        objectOverlays={objectOverlays}
+                        objectDims={objectDims?.current}
                         cameraId={camera.id}
                         username={username}
                       />

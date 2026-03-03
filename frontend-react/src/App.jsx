@@ -10,7 +10,9 @@ import AuthorizedPersons from './pages/AuthorizedPersons';
 import Alerts from './pages/Alerts';
 import Cameras from './pages/Cameras';
 import Recordings from './pages/Recordings';
+import Detections from './pages/Detections';
 import Settings from './pages/Settings';
+import AIAssistant from './pages/AIAssistant';
 
 
 function App() {
@@ -93,10 +95,26 @@ function App() {
             } 
           />
           <Route 
+            path="/detections" 
+            element={
+              <ProtectedRoute>
+                <Detections />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
             path="/settings" 
             element={
               <ProtectedRoute>
                 <Settings />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/ai-assistant" 
+            element={
+              <ProtectedRoute>
+                <AIAssistant />
               </ProtectedRoute>
             } 
           />

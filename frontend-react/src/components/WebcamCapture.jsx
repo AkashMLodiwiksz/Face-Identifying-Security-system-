@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 're
 import { Camera, VideoOff, AlertCircle, RefreshCw, Maximize2, Minimize2 } from 'lucide-react';
 import api from '../services/api';
 
-const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = true, overlays = [], detectionDims, cameraId, username }, ref) => {
+const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = true, overlays = [], detectionDims, objectOverlays = [], objectDims, cameraId, username }, ref) => {
   const videoRef = useRef(null);
   const compositeCanvasRef = useRef(null);
   const containerRef = useRef(null);
@@ -25,6 +25,10 @@ const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = tru
   useEffect(() => { overlaysRef.current = overlays; }, [overlays]);
   const detectionDimsRef = useRef(detectionDims || { width: 640, height: 480 });
   useEffect(() => { if (detectionDims) detectionDimsRef.current = detectionDims; }, [detectionDims]);
+  const objectOverlaysRef = useRef(objectOverlays);
+  useEffect(() => { objectOverlaysRef.current = objectOverlays; }, [objectOverlays]);
+  const objectDimsRef = useRef(objectDims || { width: 640, height: 480 });
+  useEffect(() => { if (objectDims) objectDimsRef.current = objectDims; }, [objectDims]);
 
   // Single composite canvas: draws video + overlays together.
   // This ensures boxes are always aligned, visible in fullscreen, and burned into recordings.
@@ -74,6 +78,42 @@ const WebcamCapture = forwardRef(({ onCapture, onStreamingChange, isActive = tru
         // Draw label text
         ctx.fillStyle = '#ffffff';
         ctx.fillText(label, x + 6, y - 6);
+      });
+
+      // Draw YOLOv8 object detection overlays
+      const YOLO_COLORS = {
+        vehicle: '#3b82f6', animal: '#f59e0b', electronics: '#8b5cf6',
+        food: '#ef4444', kitchen: '#f97316', sports: '#10b981',
+        furniture: '#6366f1', accessory: '#ec4899', infrastructure: '#64748b',
+        tool: '#dc2626', item: '#06b6d4', other: '#9ca3af',
+      };
+      const currentObjOverlays = objectOverlaysRef.current || [];
+      const objDims = objectDimsRef.current || { width: 640, height: 480 };
+      const objScaleX = canvas.width / objDims.width;
+      const objScaleY = canvas.height / objDims.height;
+
+      currentObjOverlays.forEach(obj => {
+        const color = YOLO_COLORS[obj.category] || '#9ca3af';
+        const ox = obj.x * objScaleX;
+        const oy = obj.y * objScaleY;
+        const ow = obj.w * objScaleX;
+        const oh = obj.h * objScaleY;
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(ox, oy, ow, oh);
+
+        const objLabel = `${obj.label} ${Math.round(obj.confidence * 100)}%`;
+        ctx.font = 'bold 13px sans-serif';
+        const tw = ctx.measureText(objLabel).width;
+        const lh = 20;
+        const ly = oy > lh + 4 ? oy - lh - 2 : oy + oh + 2;
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        if (ctx.roundRect) { ctx.roundRect(ox, ly, tw + 10, lh, 3); ctx.fill(); }
+        else { ctx.fillRect(ox, ly, tw + 10, lh); }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(objLabel, ox + 5, ly + 14);
       });
 
       animId = requestAnimationFrame(drawLoop);

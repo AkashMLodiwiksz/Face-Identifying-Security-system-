@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import LiveClock from './LiveClock';
+import ChatBubble from './ChatBubble';
 import { 
   LayoutDashboard, 
   Camera, 
@@ -15,7 +16,8 @@ import {
   X,
   LogOut,
   User,
-  ChevronDown
+  ChevronDown,
+  Bot
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -32,10 +34,12 @@ const Layout = ({ children }) => {
     { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/live-monitoring', icon: Camera, label: 'Live Monitoring' },
     { path: '/recordings', icon: Film, label: 'Recordings' },
+    { path: '/detections', icon: Eye, label: 'Detections' },
     { path: '/intruders', icon: UserX, label: 'Intruder Gallery' },
     { path: '/authorized-persons', icon: Users, label: 'Authorized Persons' },
     { path: '/alerts', icon: Bell, label: 'Alerts' },
     { path: '/cameras', icon: Video, label: 'Camera Management' },
+    { path: '/ai-assistant', icon: Bot, label: 'AI Assistant' },
     { path: '/settings', icon: Settings, label: 'Settings' },
   ];
 
@@ -259,6 +263,9 @@ const Layout = ({ children }) => {
           onClick={() => setSidebarOpen(false)}
         ></div>
       )}
+
+      {/* Floating AI Chat Bubble */}
+      <ChatBubble />
     </div>
   );
 };

@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_file, Response, stream_with_context
 from flask_cors import CORS
 from datetime import datetime
-from models import db, User, Camera, DetectionEvent, SystemLog, AuthorizedPerson, FaceEncoding, Intruder, IntruderAppearance, IntruderFaceEncoding, Alert
+from models import db, User, Camera, DetectionEvent, SystemLog, AuthorizedPerson, FaceEncoding, Intruder, IntruderAppearance, IntruderFaceEncoding, Alert, ObjectDetection
 from recording_manager import recording_manager
 from dotenv import load_dotenv
 import os
@@ -2002,6 +2002,619 @@ def recording_stop_disabled(camera_id):
 def active_recordings_disabled():
     # just report whether global recorder is running
     return jsonify({"recording": recording_manager.is_recording()})
+
+
+# ── YOLOv8 Object Detection ──────────────────────────────────────────────────
+
+# Category mapping for COCO classes
+YOLO_CATEGORIES = {
+    'bicycle': 'vehicle', 'car': 'vehicle', 'motorcycle': 'vehicle', 'airplane': 'vehicle',
+    'bus': 'vehicle', 'train': 'vehicle', 'truck': 'vehicle', 'boat': 'vehicle',
+    'traffic light': 'infrastructure', 'fire hydrant': 'infrastructure', 'stop sign': 'infrastructure',
+    'parking meter': 'infrastructure', 'bench': 'furniture',
+    'bird': 'animal', 'cat': 'animal', 'dog': 'animal', 'horse': 'animal', 'sheep': 'animal',
+    'cow': 'animal', 'elephant': 'animal', 'bear': 'animal', 'zebra': 'animal', 'giraffe': 'animal',
+    'backpack': 'accessory', 'umbrella': 'accessory', 'handbag': 'accessory', 'tie': 'accessory',
+    'suitcase': 'accessory',
+    'frisbee': 'sports', 'skis': 'sports', 'snowboard': 'sports', 'sports ball': 'sports',
+    'kite': 'sports', 'baseball bat': 'sports', 'baseball glove': 'sports', 'skateboard': 'sports',
+    'surfboard': 'sports', 'tennis racket': 'sports',
+    'bottle': 'kitchen', 'wine glass': 'kitchen', 'cup': 'kitchen', 'fork': 'kitchen',
+    'knife': 'kitchen', 'spoon': 'kitchen', 'bowl': 'kitchen',
+    'banana': 'food', 'apple': 'food', 'sandwich': 'food', 'orange': 'food', 'broccoli': 'food',
+    'carrot': 'food', 'hot dog': 'food', 'pizza': 'food', 'donut': 'food', 'cake': 'food',
+    'chair': 'furniture', 'couch': 'furniture', 'potted plant': 'furniture', 'bed': 'furniture',
+    'dining table': 'furniture', 'toilet': 'furniture',
+    'tv': 'electronics', 'laptop': 'electronics', 'mouse': 'electronics', 'remote': 'electronics',
+    'keyboard': 'electronics', 'cell phone': 'electronics', 'microwave': 'electronics',
+    'oven': 'electronics', 'toaster': 'electronics', 'sink': 'electronics',
+    'refrigerator': 'electronics',
+    'book': 'item', 'clock': 'item', 'vase': 'item', 'scissors': 'tool',
+    'teddy bear': 'item', 'hair drier': 'item', 'toothbrush': 'item',
+}
+
+_yolo_model = None
+
+def get_yolo_model():
+    global _yolo_model
+    if _yolo_model is None:
+        try:
+            from ultralytics import YOLO
+            model_path = os.path.join(os.path.dirname(__file__), 'yolov8n.pt')
+            _yolo_model = YOLO(model_path)
+            print('[YOLO] Model loaded successfully')
+        except Exception as e:
+            print(f'[YOLO] Failed to load model: {e}')
+    return _yolo_model
+
+
+@app.route('/api/detection/detect-objects', methods=['POST'])
+def detect_objects():
+    """Run YOLOv8 object detection on a frame (non-human objects only)."""
+    try:
+        data = request.get_json()
+        if not data or 'image' not in data:
+            return jsonify({'error': 'No image data provided'}), 400
+
+        camera_id = data.get('cameraId', 1)
+        image_data = data['image']
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+
+        # Decode image
+        import numpy as np
+        from PIL import Image
+        from io import BytesIO as BIO
+        img_bytes = base64.b64decode(image_data)
+        img = Image.open(BIO(img_bytes)).convert('RGB')
+        img_np = np.array(img)
+
+        model = get_yolo_model()
+        if model is None:
+            return jsonify({'error': 'YOLO model not available'}), 500
+
+        # Run inference — read confidence threshold from settings
+        conf_threshold = 0.70
+        try:
+            s = SystemSettings.query.filter_by(setting_key='object_confidence').first()
+            if s:
+                conf_threshold = float(s.setting_value)
+        except Exception:
+            pass
+        results = model(img_np, verbose=False, conf=conf_threshold)
+
+        objects = []
+        for r in results:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                label = model.names[cls_id]
+                # Skip 'person' — we only want non-human objects
+                if label == 'person':
+                    continue
+                conf = float(box.conf[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                category = YOLO_CATEGORIES.get(label, 'other')
+                objects.append({
+                    'label': label,
+                    'category': category,
+                    'confidence': round(conf, 3),
+                    'x': int(x1), 'y': int(y1),
+                    'w': int(x2 - x1), 'h': int(y2 - y1),
+                })
+
+        # Save detections to DB (only if objects found)
+        if objects:
+            for obj in objects:
+                det = ObjectDetection(
+                    camera_id=camera_id,
+                    label=obj['label'],
+                    category=obj['category'],
+                    confidence=obj['confidence'],
+                    bbox_x=obj['x'], bbox_y=obj['y'],
+                    bbox_w=obj['w'], bbox_h=obj['h'],
+                    timestamp=datetime.now(),
+                )
+                db.session.add(det)
+            db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'objects': objects,
+            'frame_width': img_np.shape[1],
+            'frame_height': img_np.shape[0],
+        })
+    except Exception as e:
+        db.session.rollback()
+        print(f'[YOLO] detect-objects error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/object-detections', methods=['GET'])
+def get_object_detections():
+    """Return recent object detections from DB."""
+    try:
+        limit = request.args.get('limit', 200, type=int)
+        dets = ObjectDetection.query.order_by(ObjectDetection.timestamp.desc()).limit(limit).all()
+        # Build camera name lookup
+        cam_ids = set(d.camera_id for d in dets if d.camera_id)
+        cam_map = {}
+        if cam_ids:
+            cams = Camera.query.filter(Camera.id.in_(cam_ids)).all()
+            cam_map = {c.id: c.name for c in cams}
+        result = []
+        for d in dets:
+            result.append({
+                'id': d.id,
+                'cameraId': d.camera_id,
+                'cameraName': cam_map.get(d.camera_id, f'Camera {d.camera_id}'),
+                'label': d.label,
+                'category': d.category,
+                'confidence': d.confidence,
+                'bbox': {'x': d.bbox_x, 'y': d.bbox_y, 'w': d.bbox_w, 'h': d.bbox_h},
+                'timestamp': d.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+            })
+        return jsonify(result)
+    except Exception as e:
+        print(f'Error fetching object detections: {e}')
+        return jsonify([])
+
+
+@app.route('/api/object-detections/<int:det_id>', methods=['DELETE'])
+def delete_object_detection(det_id):
+    try:
+        d = ObjectDetection.query.get(det_id)
+        if not d:
+            return jsonify({'error': 'Not found'}), 404
+        db.session.delete(d)
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/object-detections', methods=['DELETE'])
+def delete_all_object_detections():
+    try:
+        count = ObjectDetection.query.delete()
+        db.session.commit()
+        return jsonify({'success': True, 'deleted': count})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+# ─── AI CHATBOT (Groq + Gemini fallback) ───────────────────────────────────
+from groq import Groq
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
+SYSTEM_KNOWLEDGE = """
+You are **SecureVision AI Assistant**, the built-in AI support chatbot for the **Face Recognition Security System (SecureVision AI)** — a full-stack, AI-powered security platform developed by **Akash M Lodiwiks** (GitHub: @AkashMLodiwiksz).
+
+Your job is to help users with ANY question about the system — features, troubleshooting, setup, architecture, database, API, code structure, technologies, or how to use any part of the UI. You know every single detail of this system.
+
+────────────────────────────────────────
+PROJECT OVERVIEW
+────────────────────────────────────────
+• Name: Face Recognition Security System (SecureVision AI)
+• Version: 1.0.0 (initial release v0.1.0, 2025-10-06)
+• License: MIT
+• Repository: https://github.com/AkashMLodiwiksz/Face-Identifying-Security-system-
+• Developer: Akash M Lodiwiks (@AkashMLodiwiksz)
+• Default Login: Username "1", Password "1" (auto-created admin account)
+
+────────────────────────────────────────
+TECH STACK
+────────────────────────────────────────
+Frontend:
+• React 19.1.1 — UI library
+• Vite 7.1.7 — Build tool & dev server (localhost:3000)
+• React Router DOM 7.9.3 — Client-side routing
+• Tailwind CSS 3.4.1 — Utility-first CSS (dark mode)
+• Axios 1.12.2 — HTTP client (baseURL: http://localhost:5000/api)
+• Chart.js 4.5.0 + react-chartjs-2 — Data visualisation
+• Lucide React 0.544.0 — Icon library
+• PostCSS + Autoprefixer — Build pipeline
+
+Backend:
+• Python 3.12 — Language
+• Flask 3.0.3 — Web framework (localhost:5000)
+• Flask-CORS 5.0.0 — Cross-origin support
+• Flask-SQLAlchemy 3.1.1 — ORM
+• PostgreSQL 18+ — Database
+• psycopg2-binary 2.9.9 — PostgreSQL adapter
+• Flask-JWT-Extended 4.6.0 — JWT auth (installed but tokens are simple timestamp-based)
+• bcrypt 4.2.0 — Password hashing (werkzeug used instead)
+• OpenCV 4.10.0 — Video processing / RTSP streaming
+• NumPy 2.1.2 — Array operations
+• Pillow 11.0.0 — Image processing
+• python-dotenv 1.0.1 — Env vars
+• psutil 6.1.0 — System health (CPU, RAM, disk, net)
+• ffmpeg-python 0.2.0 — Video recording
+• face_recognition 1.2.3 + dlib 20.0.0 — Face detection/recognition
+• Ultralytics 8.4.19 + PyTorch — YOLOv8 object detection (yolov8n.pt, 80 COCO classes)
+• Groq SDK + Llama 3.3 70B — THIS chatbot (primary AI provider, free & fast)
+• Google Gemini 2.0 Flash — Fallback AI provider for chatbot
+
+Dev Tools:
+• concurrently 9.1.0 — Run frontend+backend together
+• ESLint 9.36.0 — Linting
+• ffmpeg — System-level video segment recording
+
+────────────────────────────────────────
+DATABASE (PostgreSQL)
+────────────────────────────────────────
+Connection: DATABASE_URL env var (postgresql://postgres:PASSWORD@localhost:5432/face_recognition_db)
+ORM: Flask-SQLAlchemy
+
+Tables (12 total):
+1. users — id, username (unique), email (unique), password_hash, role (admin/user/viewer), is_active, created_at, last_login
+2. authorized_persons — id, name, employee_id, department, designation, phone, email, is_active, photo_path, registered_at
+3. face_encodings — id, person_id (FK→authorized_persons), encoding (LargeBinary 128-dim), encoding_model (default 'FaceNet')
+4. cameras — id, name, location, rtsp_url, camera_type (IP/USB/PTZ/CCTV/Webcam), status (online/offline), is_active, is_ptz, fps, resolution, username (owner)
+5. detection_events — id, camera_id (FK), person_id (FK nullable), detection_type (face/person/object/animal), is_authorized, confidence, timestamp, image_path, bounding_box (JSON)
+6. intruders — id, first_seen, last_seen, appearance_count, status (active/identified), threat_level (low/medium/high), notes
+7. intruder_appearances — id, intruder_id (FK), detection_event_id (FK), camera_id (FK), timestamp, image_path, confidence
+8. intruder_face_encodings — id, intruder_id (FK), encoding (LargeBinary), encoding_model
+9. alerts — id, detection_event_id (FK), alert_type, severity (low/medium/high/critical), message, is_acknowledged, acknowledged_by (FK→users), acknowledged_at, created_at
+10. system_logs — id, user_id (FK), action, entity_type, entity_id, description, ip_address, timestamp
+11. system_settings — id, setting_key (unique), setting_value, description, updated_at (stores object_confidence and segment_duration)
+12. object_detections — id, camera_id, label, category, confidence, bbox_x/y/w/h, timestamp
+
+Key Relationships:
+- AuthorizedPerson → many FaceEncoding (cascade delete)
+- Camera → many DetectionEvent (cascade delete)
+- DetectionEvent → one Alert (cascade delete)
+- Intruder → many IntruderAppearance + IntruderFaceEncoding (cascade delete)
+
+────────────────────────────────────────
+API ENDPOINTS
+────────────────────────────────────────
+Authentication:
+• POST /api/auth/login — Login (returns token + user info, creates default laptop camera)
+• POST /api/auth/signup — Register (username ≥3, password ≥6, no admin self-reg)
+• POST /api/auth/logout — Logout (stateless)
+
+Dashboard:
+• GET /api/dashboard/stats — Stats (cameras, authorized, intruders, detections)
+
+Cameras:
+• GET /api/cameras?username=X — List cameras
+• POST /api/cameras — Add camera
+• GET /api/cameras/<id>?username=X — Get camera
+• PUT /api/cameras/<id> — Update camera
+• DELETE /api/cameras/<id>?username=X — Delete camera
+• POST /api/cameras/<id>/test — Test connection
+• POST /api/cameras/<id>/ptz — PTZ command
+• POST /api/cameras/<id>/settings — Camera settings
+• GET /api/cameras/<id>/mjpeg-stream — MJPEG proxy (RTSP→frames)
+• GET /api/cameras/<id>/stream — Proxy HTTP stream
+• GET /api/cameras/<id>/snapshot — Proxy snapshot
+• POST /api/cameras/laptop — Register laptop camera
+• PUT /api/cameras/laptop/status — Update laptop status
+
+Face Detection:
+• POST /api/detection/process-frame — Process base64 image for faces (detects, compares, creates intruders/alerts)
+• GET /api/detections — Recent face detection events
+
+YOLO Object Detection:
+• POST /api/detection/detect-objects — YOLOv8 inference (skips 'person', saves non-human objects)
+• GET /api/object-detections?limit=N — Recent object detections (with camera name)
+• DELETE /api/object-detections/<id> — Delete single object detection
+• DELETE /api/object-detections — Delete all
+
+Authorized Persons:
+• GET /api/authorized_persons — List
+• POST /api/authorized_persons — Add person with face images
+• DELETE /api/authorized_persons/<id> — Delete
+
+Intruders:
+• GET /api/intruders?status=X&dateFrom=X&dateTo=X — List with appearances
+• GET /api/intruders/<id> — Detail
+• PATCH /api/intruders/<id> — Update status/notes
+• DELETE /api/intruders/<id> — Delete
+
+Alerts:
+• GET /api/alerts — List (newest first)
+• POST /api/alerts/<id>/acknowledge — Acknowledge
+• DELETE /api/alerts/<id> — Delete
+• DELETE /api/alerts — Delete all
+
+Recordings:
+• POST /api/recordings/upload — Upload browser-recorded segment
+• GET /api/recordings?username=X — List grouped by camera
+• GET /api/recordings/<filename>?username=X&camera_id=X — Serve file
+• DELETE /api/recordings/<filename> — Delete recording
+• DELETE /api/recordings/format — Delete ALL recordings for user
+• POST /api/recordings/open-folder — Open Windows Explorer
+• GET /api/recordings/active — Check if recorder running
+• POST /api/cameras/<id>/recording/stop — Stop recording
+
+Captures:
+• GET /api/captures — Paginated captures list
+• DELETE /api/captures/delete/<id> — Delete capture
+• DELETE /api/captures/delete-all — Delete all
+• GET /api/captures/<filename> — Serve image
+
+System:
+• GET /api/health — Health check
+• GET /api/system/health — CPU, memory, disk, network
+• GET /api/system_settings — Get settings
+• POST /api/system_settings — Set setting
+• POST /api/user/password — Change password
+
+AI Chatbot:
+• POST /api/chat — Send message to AI assistant (this endpoint)
+
+────────────────────────────────────────
+PAGES & FEATURES (Frontend)
+────────────────────────────────────────
+1. Login (/login) — Split layout: left branding panel (SecureVision AI), right form. Username/password, "Remember Me".
+2. Signup (/signup) — Registration form with password strength indicator (weak→very strong).
+3. Dashboard (/dashboard) — 4 gradient stat cards (Active Cameras, Authorized Persons, Intruders, Total Detections with animals/vehicles/others). Recent Alerts, Camera Status, System Health (CPU/Memory/Storage/Network bars). Polls every 3-10s.
+4. Live Monitoring (/live-monitoring) — Multi-camera grid/single view. WebcamCapture draws face boxes (green=authorized, red=intruder) + YOLO object boxes (color-coded). Captures gallery.
+5. Recordings (/recordings) — Advanced player with segment-based continuous playback, prev/next, seek, fullscreen. Table with camera, filename, times, size. Format All (double-confirm).
+6. Detections (/detections) — YOLO object detection history. 4 stat cards, filters (search, category pills, date), table with category badges, confidence bars.
+7. Intruders (/intruders) — Grid of intruder cards with images, status, threats, appearances timeline, recording segments.
+8. Authorized Persons (/authorized-persons) — Webcam capture modal, add/delete persons.
+9. Alerts (/alerts) — Severity-styled cards, acknowledge/delete, filter tabs, auto-poll.
+10. Camera Management (/cameras) — Add/edit/delete cameras. IP or Webcam type, RTSP URL auto-gen, resolution/FPS/PTZ. Camera cards with status, test, edit.
+11. Settings (/settings) — 3 tabs: Recording (segment duration), Detection (YOLO confidence 10-100%), Account (change password).
+12. AI Assistant (/ai-assistant) — THIS chatbot page.
+
+────────────────────────────────────────
+KEY COMPONENTS
+────────────────────────────────────────
+• Layout — Sidebar (collapsible w-64↔w-20) + top navbar. REC indicator, LiveClock, alert bell badge, user dropdown.
+• WebcamCapture — Opens webcam, draws video + face + object overlays on canvas. Browser MediaRecorder records from composite canvas (overlays in recording).
+• RTSPCameraFeed — IP camera viewer via backend MJPEG proxy. PTZ controls, night vision, VLC, snapshot.
+• DetectionContext (BackgroundDetectionProvider) — Wraps entire app. Hidden webcam → captures frame every 3s → sends to BOTH face + YOLO endpoints in parallel via Promise.allSettled. Auto-starts with cameras, auto-stops without.
+• api.js — Axios instance, baseURL: http://localhost:5000/api, 10s timeout, auth token interceptor, 401 redirect.
+
+────────────────────────────────────────
+RECORDING SYSTEM
+────────────────────────────────────────
+• RecordingManager (singleton) manages one ffmpeg thread per camera
+• Dual recording: RTSP/IP → ffmpeg → .mp4 | USB/Webcam → browser MediaRecorder → upload .webm
+• Storage: C:\\Users\\{OS_User}\\Videos\\recordings\\{app_username}\\camera_{id}_{name}\\
+• Segment duration configurable via Settings, stored in system_settings table
+• Auto-start on server boot for RTSP cameras, webcam started from browser
+
+────────────────────────────────────────
+AI / ML FEATURES
+────────────────────────────────────────
+Face Recognition:
+• face_recognition library → face_locations() for detection, face_encodings() for 128-dim vectors
+• Matching: Euclidean distance < 0.6 = authorized, ≥ 0.6 = intruder
+• Intruders auto-added to DB with face encodings, matched against existing intruders, alerts created
+
+YOLO Object Detection:
+• YOLOv8n (yolov8n.pt), 80 COCO classes (skips 'person')
+• Confidence configurable (default 70%), stored as object_confidence in system_settings
+• Categories: vehicle, animal, electronics, food, kitchen, sports, furniture, accessory, infrastructure, tool, item, other
+• Color-coded overlays on Live Monitoring feeds
+
+────────────────────────────────────────
+AUTH SYSTEM
+────────────────────────────────────────
+• Password hashing: werkzeug.security
+• Token: "token-{userId}-{timestamp}" (simple, not JWT)
+• Frontend: localStorage (Remember Me) or sessionStorage
+• ProtectedRoute checks localStorage.getItem('authToken')
+• Axios interceptor adds Bearer token
+• Roles: admin, user, viewer
+
+────────────────────────────────────────
+STYLING
+────────────────────────────────────────
+• Tailwind CSS dark mode (gray-900 backgrounds)
+• Custom theme: primary blue #4e73df, dark sidebar #16213e, dark card #0f3460, dark bg #1a1a2e
+• Gradients: purple→violet, emerald→teal, rose→pink, amber→orange
+• Font: Inter, system-ui, sans-serif
+• Icons: Lucide React
+• Custom animations: fade-in, slide-in
+
+────────────────────────────────────────
+HOW TO RUN
+────────────────────────────────────────
+1. Install Python dependencies: pip install -r backend/requirements.txt
+2. Install Node dependencies: cd frontend-react && npm install
+3. Set up PostgreSQL, create face_recognition_db database
+4. Set DATABASE_URL in backend/.env
+5. npm run dev (runs both frontend & backend via concurrently)
+   OR: Backend: cd backend && python app.py | Frontend: cd frontend-react && npm run dev
+6. Access at http://localhost:3000, login with 1/1
+
+────────────────────────────────────────
+INSTRUCTIONS FOR YOUR BEHAVIOR
+────────────────────────────────────────
+• You are a FRIENDLY, HELPFUL, and KNOWLEDGEABLE assistant.
+• Answer questions about ANY part of the system.
+• Provide step-by-step solutions for troubleshooting.
+• Explain code, architecture, database schema, API endpoints.
+• Help with setup, configuration, and usage.
+• Give code examples when helpful.
+• If asked about something unrelated to the system, you can answer generally but always mention you're primarily the SecureVision AI assistant.
+• Keep responses concise but thorough.
+• Use markdown formatting for code blocks and structured answers.
+• You know the developer is Akash M Lodiwiks.
+"""
+
+# Initialize AI clients (lazy)
+_groq_client = None
+_gemini_client = None
+
+def get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        api_key = os.environ.get('GROQ_API_KEY', '')
+        if not api_key:
+            return None
+        _groq_client = Groq(api_key=api_key)
+    return _groq_client
+
+def get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None and GEMINI_AVAILABLE:
+        api_key = os.environ.get('GEMINI_API_KEY', '')
+        if not api_key:
+            return None
+        _gemini_client = genai.Client(api_key=api_key)
+    return _gemini_client
+
+# In-memory chat history keyed by username (list of {role, content} dicts)
+_chat_histories = {}
+
+def _call_groq(messages):
+    """Call Groq API with Llama 3.3 70B"""
+    client = get_groq_client()
+    if not client:
+        return None, 'Groq not configured'
+    try:
+        response = client.chat.completions.create(
+            model='llama-3.3-70b-versatile',
+            messages=messages,
+            max_tokens=4096,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content, None
+    except Exception as e:
+        return None, str(e)
+
+def _call_gemini(messages):
+    """Call Gemini API as fallback"""
+    client = get_gemini_client()
+    if not client:
+        return None, 'Gemini not configured'
+    try:
+        # Convert message format for Gemini
+        contents = []
+        for msg in messages:
+            if msg['role'] == 'system':
+                continue  # system instruction handled separately
+            role = 'user' if msg['role'] == 'user' else 'model'
+            contents.append(
+                genai_types.Content(role=role, parts=[genai_types.Part.from_text(text=msg['content'])])
+            )
+        sys_instruction = next((m['content'] for m in messages if m['role'] == 'system'), '')
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=contents,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=sys_instruction,
+                temperature=0.7,
+                max_output_tokens=4096,
+            )
+        )
+        return response.text, None
+    except Exception as e:
+        return None, str(e)
+
+@app.route('/api/chat', methods=['POST'])
+def ai_chat():
+    """AI Chatbot endpoint — tries Groq (Llama 3.3 70B) first, falls back to Gemini"""
+    try:
+        data = request.get_json()
+        message = data.get('message', '').strip()
+        username = data.get('username', 'anonymous')
+
+        if not message:
+            return jsonify({'error': 'Message is required'}), 400
+
+        # Check if any AI provider is configured
+        groq_available = bool(os.environ.get('GROQ_API_KEY', ''))
+        gemini_available = GEMINI_AVAILABLE and bool(os.environ.get('GEMINI_API_KEY', ''))
+        if not groq_available and not gemini_available:
+            return jsonify({
+                'error': 'AI chatbot is not configured. Please set GROQ_API_KEY (https://console.groq.com/keys) or GEMINI_API_KEY (https://aistudio.google.com/apikey) in backend/.env'
+            }), 503
+
+        # Get or create chat history for this user
+        if username not in _chat_histories:
+            _chat_histories[username] = []
+
+        # Enrich message with live system context
+        context_note = ""
+        try:
+            cam_count = Camera.query.filter(Camera.username != '1').count()
+            auth_count = AuthorizedPerson.query.count()
+            intruder_count = Intruder.query.filter_by(status='active').count()
+            alert_count = Alert.query.filter_by(is_acknowledged=False).count()
+            detection_count = ObjectDetection.query.count()
+            user_count = User.query.count()
+            context_note = (
+                f"[LIVE SYSTEM STATUS — Cameras: {cam_count}, Authorized Persons: {auth_count}, "
+                f"Active Intruders: {intruder_count}, Unread Alerts: {alert_count}, "
+                f"Object Detections: {detection_count}, Registered Users: {user_count}]\n\n"
+            )
+        except Exception:
+            pass
+
+        enriched = context_note + message
+
+        # Add user message to history
+        _chat_histories[username].append({'role': 'user', 'content': enriched})
+
+        # Keep last 30 messages to avoid token overflow
+        if len(_chat_histories[username]) > 30:
+            _chat_histories[username] = _chat_histories[username][-30:]
+
+        # Build full messages list with system prompt
+        messages = [{'role': 'system', 'content': SYSTEM_KNOWLEDGE}] + _chat_histories[username]
+
+        # Try Groq first (primary), then Gemini (fallback)
+        reply = None
+        provider = None
+        errors = []
+
+        if groq_available:
+            reply, err = _call_groq(messages)
+            if reply:
+                provider = 'Groq (Llama 3.3 70B)'
+            else:
+                errors.append(f'Groq: {err}')
+
+        if not reply and gemini_available:
+            reply, err = _call_gemini(messages)
+            if reply:
+                provider = 'Gemini 2.0 Flash'
+            else:
+                errors.append(f'Gemini: {err}')
+
+        if not reply:
+            error_detail = ' | '.join(errors) if errors else 'No AI provider available'
+            return jsonify({'error': f'AI service error: {error_detail}'}), 500
+
+        # Add assistant response to history
+        _chat_histories[username].append({'role': 'assistant', 'content': reply})
+
+        return jsonify({
+            'reply': reply,
+            'provider': provider,
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+    except Exception as e:
+        print(f'Chat error: {e}')
+        return jsonify({'error': f'AI service error: {str(e)}'}), 500
+
+
+@app.route('/api/chat/clear', methods=['POST'])
+def clear_chat():
+    """Clear chat history for a user"""
+    try:
+        data = request.get_json()
+        username = data.get('username', 'anonymous')
+        if username in _chat_histories:
+            del _chat_histories[username]
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

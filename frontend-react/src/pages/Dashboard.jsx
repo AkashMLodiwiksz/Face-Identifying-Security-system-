@@ -15,7 +15,11 @@ import {
   CheckCircle,
   XCircle,
   Bell,
-  ArrowRight
+  ArrowRight,
+  Bug,
+  Dog,
+  Car,
+  Package
 } from 'lucide-react';
 
 const Dashboard = () => {
@@ -23,7 +27,7 @@ const Dashboard = () => {
     cameras: { total: 0, online: 0, offline: 0 },
     authorizedPersons: { total: 24, active: 22, inactive: 2 },
     intrudersDetected: { today: 3, thisWeek: 12, thisMonth: 45 },
-    detectionsToday: { total: 156, persons: 89, objects: 52, animals: 15 }
+    detectionsToday: { total: 0, animals: 0, vehicles: 0, others: 0 }
   });
 
   const [cameras, setCameras] = useState([]);
@@ -155,6 +159,30 @@ const Dashboard = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Fetch object detections for today
+  useEffect(() => {
+    const fetchObjectDetections = async () => {
+      try {
+        const res = await api.get('/object-detections');
+        const dets = Array.isArray(res.data) ? res.data : [];
+        const today = new Date().toISOString().split('T')[0];
+        const todayDets = dets.filter(d => d.timestamp && d.timestamp.startsWith(today));
+        const animals = todayDets.filter(d => d.category === 'animal').length;
+        const vehicles = todayDets.filter(d => d.category === 'vehicle').length;
+        const others = todayDets.length - animals - vehicles;
+        setStats(prev => ({
+          ...prev,
+          detectionsToday: { total: todayDets.length, animals, vehicles, others }
+        }));
+      } catch (err) {
+        console.error('Error fetching object detections:', err);
+      }
+    };
+    fetchObjectDetections();
+    const interval = setInterval(fetchObjectDetections, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Fetch system health data
   useEffect(() => {
     const fetchSystemHealth = async () => {
@@ -279,9 +307,9 @@ const Dashboard = () => {
               <p className="text-sm opacity-90 mb-1">Total Detections</p>
               <p className="text-4xl font-bold mb-3">{stats.detectionsToday.total}</p>
               <div className="grid grid-cols-3 gap-2 text-xs opacity-90">
-                <span>👤 {stats.detectionsToday.persons}</span>
-                <span>📦 {stats.detectionsToday.objects}</span>
-                <span>🐾 {stats.detectionsToday.animals}</span>
+                <span className="flex items-center gap-1"><Dog className="w-3.5 h-3.5" /> {stats.detectionsToday.animals}</span>
+                <span className="flex items-center gap-1"><Car className="w-3.5 h-3.5" /> {stats.detectionsToday.vehicles}</span>
+                <span className="flex items-center gap-1"><Package className="w-3.5 h-3.5" /> {stats.detectionsToday.others}</span>
               </div>
             </div>
           </div>

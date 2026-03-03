@@ -8,6 +8,9 @@ const Settings = () => {
   const [segmentDuration, setSegmentDuration] = React.useState(10);
   const [saving, setSaving] = React.useState(false);
 
+  // detection settings
+  const [objectConfidence, setObjectConfidence] = React.useState(70);
+
   // password fields
   const [currentPw, setCurrentPw] = React.useState('');
   const [newPw, setNewPw] = React.useState('');
@@ -21,16 +24,20 @@ const Settings = () => {
         if (res.data && res.data.segment_duration) {
           setSegmentDuration(res.data.segment_duration);
         }
+        if (res.data && res.data.object_confidence) {
+          setObjectConfidence(Math.round(parseFloat(res.data.object_confidence) * 100));
+        }
       })
       .catch(err => console.error('Error loading settings', err));
   }, []);
 
   const saveSettings = () => {
     setSaving(true);
-    api.post('/system_settings', { key: 'segment_duration', value: segmentDuration })
-      .then(() => {
-        setSaving(false);
-      })
+    Promise.all([
+      api.post('/system_settings', { key: 'segment_duration', value: segmentDuration }),
+      api.post('/system_settings', { key: 'object_confidence', value: (objectConfidence / 100).toFixed(2) }),
+    ])
+      .then(() => setSaving(false))
       .catch(err => {
         console.error('Failed to save settings', err);
         setSaving(false);
@@ -87,6 +94,12 @@ const Settings = () => {
               Recording
             </button>
             <button
+              className={`mr-4 pb-2 ${activeTab === 'detection' ? 'border-b-2 border-primary text-primary' : 'text-gray-600 dark:text-gray-400'}`}
+              onClick={() => setActiveTab('detection')}
+            >
+              Detection
+            </button>
+            <button
               className={`pb-2 ${activeTab === 'account' ? 'border-b-2 border-primary text-primary' : 'text-gray-600 dark:text-gray-400'}`}
               onClick={() => setActiveTab('account')}
             >
@@ -109,6 +122,32 @@ const Settings = () => {
                 value={segmentDuration}
                 onChange={(e) => setSegmentDuration(parseInt(e.target.value, 10) || 0)}
               />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'detection' && (
+          <div className="card p-6 mb-6">
+            <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-white">Object Detection (YOLOv8)</h3>
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Minimum Confidence Level
+              </label>
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="5"
+                  value={objectConfidence}
+                  onChange={e => setObjectConfidence(parseInt(e.target.value, 10))}
+                  className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                />
+                <span className="text-lg font-bold text-purple-600 dark:text-purple-400 min-w-[3rem] text-right">{objectConfidence}%</span>
+              </div>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Only objects detected with confidence above this threshold will be recorded. Lower values detect more objects but may include false positives.
+              </p>
             </div>
           </div>
         )}
@@ -157,20 +196,6 @@ const Settings = () => {
             </button>
           </div>
         )}
-
-        {/* Placeholder Content */}
-        <div className="card text-center py-12">
-          <SettingsIcon className="w-16 h-16 mx-auto text-gray-400 mb-4" />
-          <h3 className="text-xl font-semibold text-gray-700 dark:text-gray-300 mb-2">
-            System Configuration
-          </h3>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">
-            Configure AI models, alert preferences, and system behavior
-          </p>
-          <p className="text-sm text-gray-400">
-            Coming soon: AI settings, notifications, user management, and more
-          </p>
-        </div>
       </div>
     </Layout>
   );

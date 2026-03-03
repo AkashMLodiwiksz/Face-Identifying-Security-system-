@@ -176,3 +176,19 @@ class SystemSettings(db.Model):
     setting_value = db.Column(db.Text)
     description = db.Column(db.String(255))
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ObjectDetection(db.Model):
+    """Non-human object detection events (YOLOv8)"""
+    __tablename__ = 'object_detections'
+
+    id = db.Column(db.Integer, primary_key=True)
+    camera_id = db.Column(db.Integer, nullable=False)
+    label = db.Column(db.String(100), nullable=False)       # e.g. 'car', 'cat', 'knife'
+    category = db.Column(db.String(50))                      # 'vehicle', 'animal', 'tool', etc.
+    confidence = db.Column(db.Float)
+    bbox_x = db.Column(db.Integer)                           # bounding box
+    bbox_y = db.Column(db.Integer)
+    bbox_w = db.Column(db.Integer)
+    bbox_h = db.Column(db.Integer)
+    timestamp = db.Column(db.DateTime, default=datetime.now, index=True)
