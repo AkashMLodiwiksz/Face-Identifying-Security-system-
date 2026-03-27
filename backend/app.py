@@ -30,7 +30,12 @@ def get_recordings_dir(username=None, camera_id=None, camera_name=None):
             custom_path = setting.setting_value.strip()
             custom_path = os.path.expanduser(custom_path)
             if not os.path.isabs(custom_path):
-                custom_path = os.path.abspath(custom_path)
+                # Relative paths are interpreted under the user profile Videos directory
+                # to avoid creating folders under the backend working directory.
+                if user_profile:
+                    custom_path = os.path.join(user_profile, custom_path)
+                else:
+                    custom_path = os.path.abspath(custom_path)
             base_recordings_dir = custom_path
     except Exception as e:
         print(f"[WARNING] Could not read recordings_path setting: {e}")
@@ -611,6 +616,18 @@ def system_settings():
             recording_manager.update_duration(newdur)
         except Exception:
             pass
+
+    # if recordings directory changed, restart recorder sessions on new path
+    if key == 'recordings_path':
+        try:
+            # stop all active sessions and restart with latest camera (if any)
+            recording_manager.stop_all()
+            latest = get_latest_camera()
+            if latest:
+                duration = get_segment_duration()
+                recording_manager.start_recording(latest.id, latest.rtsp_url or '', latest.username, latest.name, duration=duration)
+        except Exception as e:
+            print(f"[RECORDER] Could not apply new recordings_path: {e}")
 
     return jsonify({'success': True})
 
@@ -1694,6 +1711,32 @@ def open_recordings_folder():
                 }), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/recordings/select-folder', methods=['GET'])
+def select_recordings_folder():
+    """System folder picker for selecting recordings path (desktop only)."""
+    try:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except Exception as ie:
+            return jsonify({'error': 'tkinter not available', 'detail': str(ie)}), 500
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        folder_path = filedialog.askdirectory()
+        root.destroy()
+
+        if not folder_path:
+            return jsonify({'canceled': True}), 200
+
+        return jsonify({'path': folder_path}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 # Get all recordings
 @app.route('/api/recordings')

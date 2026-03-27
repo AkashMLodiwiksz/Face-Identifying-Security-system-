@@ -15,6 +15,7 @@ const AIAssistant = () => {
   const [copiedId, setCopiedId] = useState(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [aiProvider, setAiProvider] = useState('');
+  const [lastUserIntent, setLastUserIntent] = useState(null);
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const inputRef = useRef(null);
@@ -71,6 +72,48 @@ const AIAssistant = () => {
     setIsLoading(true);
     setError(null);
 
+    const userIntent = detectIntent(trimmed);
+    if (userIntent && userIntent.type === 'do_it' && lastUserIntent) {
+      setIsLoading(true);
+      const result = await executeIntent(lastUserIntent);
+      setMessages(prev => [...prev, {
+        id: Date.now() + 2,
+        role: 'assistant',
+        content: result.success ? `✅ ${result.message}` : `⚠️ ${result.message}`,
+        timestamp: new Date().toLocaleTimeString()
+      }]);
+      setIsLoading(false);
+      setLastUserIntent(result.success ? null : lastUserIntent);
+      return;
+    }
+
+    if (userIntent && userIntent.type === 'delete_camera') {
+      setLastUserIntent(userIntent);
+      setIsLoading(true);
+      const result = await executeIntent(userIntent);
+      setMessages(prev => [...prev, {
+        id: Date.now() + 2,
+        role: 'assistant',
+        content: result.success ? `✅ ${result.message}` : `⚠️ ${result.message}`,
+        timestamp: new Date().toLocaleTimeString()
+      }]);
+      setIsLoading(false);
+      if (!result.success) {
+        // Fall back to AI text answer if action can't be completed automatically.
+        const res = await api.post('/chat', { message: trimmed, username });
+        const assistantMsg = {
+          id: Date.now() + 3,
+          role: 'assistant',
+          content: res.data.reply,
+          provider: res.data.provider || '',
+          timestamp: new Date().toLocaleTimeString()
+        };
+        if (res.data.provider) setAiProvider(res.data.provider);
+        setMessages(prev => [...prev, assistantMsg]);
+      }
+      return;
+    }
+
     try {
       const res = await api.post('/chat', { message: trimmed, username });
       const assistantMsg = {
@@ -95,6 +138,55 @@ const AIAssistant = () => {
       setIsLoading(false);
       inputRef.current?.focus();
     }
+  };
+
+  const detectIntent = (text) => {
+    const lower = text.toLowerCase();
+
+    if (/delete\s+.*camera|remove\s+.*camera|delete camera|remove camera/.test(lower)) {
+      return { type: 'delete_camera', label: 'Delete camera' };
+    }
+
+    if (/^do it$/i.test(text.trim()) || /do it/.test(lower) || /execute/.test(lower)) {
+      return { type: 'do_it', label: 'Execute previous intent' };
+    }
+
+    return null;
+  };
+
+  const executeIntent = async (intent) => {
+    if (!intent) {
+      return { success: false, message: 'No action intent to execute.' };
+    }
+
+    if (intent.type === 'delete_camera') {
+      try {
+        const cameras = (await api.get(`/cameras?username=${username}`)).data;
+
+        if (!Array.isArray(cameras) || cameras.length === 0) {
+          return { success: false, message: 'No cameras found to delete.' };
+        }
+
+        if (cameras.length > 1) {
+          const ids = cameras.map((cam) => `${cam.id} (${cam.name || 'unnamed'})`).join(', ');
+          return {
+            success: false,
+            message: `Multiple cameras found (${ids}). Please ask with a specific camera id.`,
+          };
+        }
+
+        const cameraId = cameras[0].id;
+        await api.delete(`/cameras/${cameraId}?username=${username}`);
+
+        return { success: true, message: `Camera ${cameraId} deleted successfully.` };
+      } catch (error) {
+        console.error('executeIntent delete_camera error:', error);
+        const msg = error.response?.data?.error || error.message || 'Failed to delete camera.';
+        return { success: false, message: msg };
+      }
+    }
+
+    return { success: false, message: `Intent type ${intent.type} not implemented` };
   };
 
   const handleKeyDown = (e) => {

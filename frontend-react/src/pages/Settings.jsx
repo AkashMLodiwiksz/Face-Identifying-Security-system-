@@ -21,8 +21,14 @@ const Settings = () => {
   const [pwSaving, setPwSaving] = React.useState(false);
 
   React.useEffect(() => {
-    api.get('/system_settings')
-      .then(res => {
+    let isMounted = true;
+
+    const setFromSystemSettings = async () => {
+      try {
+        const res = await api.get('/system_settings');
+
+        if (!isMounted) return;
+
         if (res.data && res.data.segment_duration) {
           setSegmentDuration(res.data.segment_duration);
         }
@@ -31,9 +37,24 @@ const Settings = () => {
         }
         if (res.data && res.data.recordings_path) {
           setRecordingsPath(res.data.recordings_path);
+          return;
         }
-      })
-      .catch(err => console.error('Error loading settings', err));
+
+        // if no recordings_path in settings, pull currently active path from recordings endpoint
+        const rec = await api.get(`/recordings?username=${localStorage.getItem('username') || 'anonymous'}`);
+        if (rec.data && rec.data.recordingsPath) {
+          setRecordingsPath(rec.data.recordingsPath);
+        }
+      } catch (err) {
+        console.error('Error loading settings/path', err);
+      }
+    };
+
+    setFromSystemSettings();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const saveSettings = () => {
@@ -48,6 +69,43 @@ const Settings = () => {
         console.error('Failed to save settings', err);
         setSaving(false);
       });
+  };
+
+  const openDirectoryPicker = async () => {
+    try {
+      // Prefer backend-native folder picker (Windows) to get absolute path
+      const res = await api.get('/recordings/select-folder');
+      if (res.data?.path) {
+        setRecordingsPath(res.data.path);
+        return;
+      }
+      if (res.data?.canceled) {
+        return;
+      }
+      if (res.data?.error) {
+        console.warn('Folder picker endpoint warning:', res.data.error);
+      }
+    } catch (err) {
+      console.warn('Folder picking via backend failed:', err);
+    }
+
+    // Modern browsers: use directory picker UI (does not imply upload)
+    if (window.showDirectoryPicker) {
+      try {
+        const dirHandle = await window.showDirectoryPicker();
+        if (dirHandle && dirHandle.name) {
+          // NOTE: browsers do not expose absolute path for security.
+          // Store directory name only (user should adjust to absolute path manually if needed).
+          setRecordingsPath(dirHandle.name);
+        }
+        return;
+      } catch {
+        // user canceled or error
+      }
+    }
+
+    // Fallback for older browsers: use hidden input webkitdirectory selector
+    directoryInputRef.current?.click();
   };
 
   const changePassword = () => {
@@ -137,14 +195,14 @@ const Settings = () => {
                 <input
                   type="text"
                   className="input flex-1"
-                  placeholder="e.g., C:\\MyRecordings\\CameraFiles"
+                  placeholder={recordingsPath || 'e.g., C:\\MyRecordings\\CameraFiles'}
                   value={recordingsPath}
                   onChange={(e) => setRecordingsPath(e.target.value)}
                 />
                 <button
                   className="btn-secondary"
                   type="button"
-                  onClick={() => directoryInputRef.current?.click()}
+                  onClick={openDirectoryPicker}
                 >
                   Browse
                 </button>
@@ -157,24 +215,40 @@ const Settings = () => {
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   const files = e.target.files;
-                  if (files && files.length > 0) {
-                    const first = files[0];
-                    if (first.path) {
-                      // Electron/Node environment available
-                      const p = first.path;
-                      const folder = p.substring(0, p.lastIndexOf(first.name));
-                      setRecordingsPath(folder);
-                    } else if (first.webkitRelativePath) {
-                      const parts = first.webkitRelativePath.split('/');
-                      if (parts.length > 0) {
-                        setRecordingsPath(parts[0]);
-                      }
-                    }
+                  if (!files || files.length === 0) {
+                    return;
                   }
+
+                  const first = files[0];
+
+                  // Attempt native/desktop absolute path (Electron or similar)
+                  if (first.path) {
+                    const p = first.path;
+                    const folder = p.substring(0, p.lastIndexOf(first.name));
+                    setRecordingsPath(folder);
+                    e.target.value = null;
+                    return;
+                  }
+
+                  // Webkit directory selection: infer root from relative path (folder subpath)
+                  if (first.webkitRelativePath) {
+                    const parts = first.webkitRelativePath.split('/');
+                    if (parts.length > 1) {
+                      setRecordingsPath(parts[0]);
+                    } else if (parts.length === 1) {
+                      setRecordingsPath(parts[0]);
+                    }
+                    e.target.value = null;
+                    return;
+                  }
+
+                  // Fallback: no folder metadata available
+                  setRecordingsPath('');
+                  e.target.value = null;
                 }}
               />
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                Leave empty to use default: User profile Videos/recordings.
+                Leave empty to use default: User profile Videos/recordings. For custom folder, enter absolute path (e.g., C:\\Users\\YourName\\Videos\\recordings) to avoid backend-root relative paths.
               </p>
             </div>
           </div>
