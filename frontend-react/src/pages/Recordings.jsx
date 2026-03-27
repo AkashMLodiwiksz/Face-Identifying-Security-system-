@@ -19,6 +19,8 @@ const Recordings = () => {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [segmentDuration, setSegmentDuration] = useState(10); // seconds from settings, default 10
+  const [recordingsPath, setRecordingsPath] = useState('');
+  const [defaultPath, setDefaultPath] = useState('');
   const videoRef = useRef(null);
 
   // Modal states
@@ -48,6 +50,7 @@ const Recordings = () => {
       setRecordingsByCamera(response.data.recordingsByCamera || {});
       setCameras(response.data.cameras || []);
       setTotalSize(response.data.totalSizeMB);
+      setDefaultPath(response.data.recordingsPath || '');
       // always set (default or from backend)
       const sd = parseInt(response.data.segmentDuration,10);
       setSegmentDuration(isNaN(sd) || sd <= 0 ? 10 : sd);
@@ -409,7 +412,7 @@ const Recordings = () => {
                   className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 mt-1 cursor-pointer hover:underline transition-colors text-left"
                   title="Click to open folder in Windows Explorer"
                 >
-                  {`C:\\Users\\user\\Videos\\recordings\\${localStorage.getItem('username') || ''}`}
+                  {recordingsPath || defaultPath || `C:\\Users\\user\\Videos\\recordings\\${localStorage.getItem('username') || ''}`}
                 </button>
               </div>
               <div className="p-3 bg-purple-100 dark:bg-purple-900 rounded-lg">

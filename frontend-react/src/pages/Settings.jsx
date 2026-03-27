@@ -6,7 +6,9 @@ import api from '../services/api';
 const Settings = () => {
   const [activeTab, setActiveTab] = React.useState('recording');
   const [segmentDuration, setSegmentDuration] = React.useState(10);
+  const [recordingsPath, setRecordingsPath] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const directoryInputRef = React.useRef(null);
 
   // detection settings
   const [objectConfidence, setObjectConfidence] = React.useState(70);
@@ -27,6 +29,9 @@ const Settings = () => {
         if (res.data && res.data.object_confidence) {
           setObjectConfidence(Math.round(parseFloat(res.data.object_confidence) * 100));
         }
+        if (res.data && res.data.recordings_path) {
+          setRecordingsPath(res.data.recordings_path);
+        }
       })
       .catch(err => console.error('Error loading settings', err));
   }, []);
@@ -36,6 +41,7 @@ const Settings = () => {
     Promise.all([
       api.post('/system_settings', { key: 'segment_duration', value: segmentDuration }),
       api.post('/system_settings', { key: 'object_confidence', value: (objectConfidence / 100).toFixed(2) }),
+      api.post('/system_settings', { key: 'recordings_path', value: recordingsPath.trim() }),
     ])
       .then(() => setSaving(false))
       .catch(err => {
@@ -122,6 +128,54 @@ const Settings = () => {
                 value={segmentDuration}
                 onChange={(e) => setSegmentDuration(parseInt(e.target.value, 10) || 0)}
               />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Recordings save path
+              </label>
+              <div className="flex gap-2 items-center">
+                <input
+                  type="text"
+                  className="input flex-1"
+                  placeholder="e.g., C:\\MyRecordings\\CameraFiles"
+                  value={recordingsPath}
+                  onChange={(e) => setRecordingsPath(e.target.value)}
+                />
+                <button
+                  className="btn-secondary"
+                  type="button"
+                  onClick={() => directoryInputRef.current?.click()}
+                >
+                  Browse
+                </button>
+              </div>
+              <input
+                ref={directoryInputRef}
+                type="file"
+                webkitdirectory="true"
+                directory="true"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (files && files.length > 0) {
+                    const first = files[0];
+                    if (first.path) {
+                      // Electron/Node environment available
+                      const p = first.path;
+                      const folder = p.substring(0, p.lastIndexOf(first.name));
+                      setRecordingsPath(folder);
+                    } else if (first.webkitRelativePath) {
+                      const parts = first.webkitRelativePath.split('/');
+                      if (parts.length > 0) {
+                        setRecordingsPath(parts[0]);
+                      }
+                    }
+                  }
+                }}
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                Leave empty to use default: User profile Videos/recordings.
+              </p>
             </div>
           </div>
         )}

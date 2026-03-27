@@ -16,23 +16,39 @@ load_dotenv()
 
 # Helper function to get recordings directory
 def get_recordings_dir(username=None, camera_id=None, camera_name=None):
-    """Get the recordings directory path using the current user's Videos folder"""
-    user_profile = os.environ.get('USERPROFILE')  # e.g., C:\Users\YourActualUsername
-    base_recordings_dir = os.path.join(user_profile, 'Videos', 'recordings')
-    
-    # If username is provided, return user-specific directory
+    """Get the recordings directory path from system settings or fallback to user's Videos folder."""
+    user_profile = os.environ.get('USERPROFILE', '')  # e.g., C:\Users\YourActualUsername
+
+    # default base recordings directory
+    default_base = os.path.join(user_profile, 'Videos', 'recordings') if user_profile else os.path.join('recordings')
+
+    base_recordings_dir = default_base
+    try:
+        # use custom recordings path if set in system_settings
+        setting = SystemSettings.query.filter_by(setting_key='recordings_path').first()
+        if setting and setting.setting_value:
+            custom_path = setting.setting_value.strip()
+            custom_path = os.path.expanduser(custom_path)
+            if not os.path.isabs(custom_path):
+                custom_path = os.path.abspath(custom_path)
+            base_recordings_dir = custom_path
+    except Exception as e:
+        print(f"[WARNING] Could not read recordings_path setting: {e}")
+        base_recordings_dir = default_base
+
+    # get the user-specific base directory (if requested)
     if username:
         user_dir = os.path.join(base_recordings_dir, username)
-        
+
         # If camera info is provided, return camera-specific directory
         if camera_id and camera_name:
             # Sanitize camera name for folder name
             safe_camera_name = "".join(c for c in camera_name if c.isalnum() or c in (' ', '-', '_')).strip()
             camera_folder = f"camera_{camera_id}_{safe_camera_name}"
             return os.path.join(user_dir, camera_folder)
-        
+
         return user_dir
-    
+
     return base_recordings_dir
 
 # helper to fetch configuration from database
@@ -94,7 +110,13 @@ def ensure_laptop_camera(username):
         db.session.rollback()
         return False
 
-app = Flask(__name__)
+app = Flask(__name__,
+    static_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend-react', 'dist', 'assets'),
+    static_url_path='/assets'
+)
+
+# Path to React production build
+FRONTEND_BUILD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'frontend-react', 'dist')
 
 # Database configuration
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
@@ -1745,6 +1767,7 @@ def get_recordings():
         # Sort all recordings by newest first
         all_recordings.sort(key=lambda x: x['timestamp'], reverse=True)
         
+        base_path = get_recordings_dir()  # current global base path
         return jsonify({
             "recordings": all_recordings,
             "recordingsByCamera": recordings_by_camera,
@@ -1755,7 +1778,8 @@ def get_recordings():
             } for c in cameras],
             "total": len(all_recordings),
             "totalSizeMB": round(sum(r['size'] for r in all_recordings) / (1024 * 1024), 2),
-            "segmentDuration": get_segment_duration()
+            "segmentDuration": get_segment_duration(),
+            "recordingsPath": base_path
         })
         
     except Exception as e:
@@ -2198,6 +2222,13 @@ You are **SecureVision AI Assistant**, the built-in AI support chatbot for the *
 
 Your job is to help users with ANY question about the system — features, troubleshooting, setup, architecture, database, API, code structure, technologies, or how to use any part of the UI. You know every single detail of this system.
 
+Priority response style:
+• Focus on concise user-friendly steps (e.g., “Go to Camera Management → select camera → delete”).
+• Avoid code snippets or API request examples unless the user explicitly asks for programming help.
+• Prefer exact navigation actions and plain language for feature usage requests.
+• If asked for code, provide a short code sample with minimal extra detail.
+• Keep answers simple and actionable by default.
+
 ────────────────────────────────────────
 PROJECT OVERVIEW
 ────────────────────────────────────────
@@ -2617,5 +2648,29 @@ def clear_chat():
 
 
 if __name__ == '__main__':
+    import webbrowser, threading
     port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port)
+    is_production = not app.debug and os.path.exists(os.path.join(FRONTEND_BUILD_DIR, 'index.html'))
+
+    if is_production or os.environ.get('SERVE_FRONTEND') == '1':
+        # Serve React SPA — catch-all route (must be registered last)
+        @app.route('/', defaults={'path': ''})
+        @app.route('/<path:path>')
+        def serve_react(path):
+            # Serve static files if they exist
+            full_path = os.path.join(FRONTEND_BUILD_DIR, path)
+            if path and os.path.exists(full_path) and not os.path.isdir(full_path):
+                return send_file(full_path)
+            # Otherwise serve index.html for SPA routing
+            return send_file(os.path.join(FRONTEND_BUILD_DIR, 'index.html'))
+
+        print(f'\n  SecureVision AI — Production Mode')
+        print(f'  Open http://localhost:{port} in your browser\n')
+        # Auto-open browser after a short delay
+        threading.Timer(1.5, lambda: webbrowser.open(f'http://localhost:{port}')).start()
+        app.run(debug=False, host='0.0.0.0', port=port)
+    else:
+        print(f'\n  SecureVision AI — Development Mode')
+        print(f'  Backend: http://localhost:{port}')
+        print(f'  Frontend: http://localhost:3000\n')
+        app.run(debug=True, host='0.0.0.0', port=port)
