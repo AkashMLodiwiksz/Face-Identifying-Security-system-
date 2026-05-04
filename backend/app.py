@@ -279,8 +279,8 @@ def login():
         user.last_login = datetime.now()
         db.session.commit()
         
-        # Ensure user has a default laptop camera
-        ensure_laptop_camera(username)
+        # Do not recreate the default laptop camera on every login.
+        # If a user deleted it, it should remain deleted unless they add it again.
         
         # Generate token (in production, use JWT)
         token = f"token-{user.id}-{datetime.now().timestamp()}"
